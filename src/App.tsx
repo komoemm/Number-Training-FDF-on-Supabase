@@ -1,0 +1,2414 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect, useRef } from 'react';
+import { supabase, isSupabaseActive } from './supabase';
+import { 
+  generateSampleCustomInvoice, 
+  renderReceiptToDataUrl,
+  generateRandomInvoiceNumber,
+  generateRandomDateNumber,
+  generateRandomPhoneNumber
+} from './utils/receiptGenerator';
+import { generateCertificatePDF } from './utils/pdfGenerator';
+import { generateCertificateHTML } from './utils/htmlGenerator';
+import { evaluateCategoryLevel, getCategoryRankDetails, CATEGORY_SLA_CONFIG } from './utils/speedRanking';
+import { GeneratedInvoiceData, TypingDetail, TestSession, TrainingMode, TrainingCategory } from './types';
+import InvoiceViewer from './components/InvoiceViewer';
+import StatsPanel from './components/StatsPanel';
+import HistoryLogs from './components/HistoryLogs';
+import LoginScreen from './components/LoginScreen';
+import { CategorySandbox } from './components/CategorySandbox';
+import { 
+  Zap, Keyboard, ShieldAlert, CheckCircle2, ChevronRight, ChevronLeft,
+  RotateCcw, LogOut, HelpCircle, Trophy, BarChart2, Check, X,
+  Clock, Database, Award, Download, Users, FileText, Calendar, Phone,
+  Sparkles, ShieldCheck
+} from 'lucide-react';
+
+export default function App() {
+  // Application & System states
+  const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
+
+  // Local Offline User States
+  const [currentOfflineUser, setCurrentOfflineUser] = useState<any>(() => {
+    try {
+      const savedUser = localStorage.getItem('trainer_logged_in_user');
+      return savedUser ? JSON.parse(savedUser) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [localUsers, setLocalUsers] = useState<any[]>(() => {
+    try {
+      const savedUsers = localStorage.getItem('trainer_sandbox_users');
+      if (savedUsers) {
+        return JSON.parse(savedUsers);
+      }
+    } catch {}
+    // Initial standard trainer users seed
+    return [
+      { username: 'admin', passwordText: 'admin', role: 'admin', createdAt: '2026-05-22' },
+      { username: 'guest', passwordText: 'guest', role: 'trainee', createdAt: '2026-05-22' }
+    ];
+  });
+
+  const [newTraineeUsername, setNewTraineeUsername] = useState<string>('');
+  const [newTraineePassword, setNewTraineePassword] = useState<string>('');
+  const [userCreationError, setUserCreationError] = useState<string | null>(null);
+  const [userCreationSuccess, setUserCreationSuccess] = useState<string | null>(null);
+
+  // States for bulk operator creation
+  const [operatorInputMode, setOperatorInputMode] = useState<'single' | 'bulk'>('single');
+  const [bulkInputText, setBulkInputText] = useState<string>('');
+  const [bulkDefaultPass, setBulkDefaultPass] = useState<string>('trainee123');
+
+  // Track trainee user account slated for deletion confirmation
+  const [userPendingDelete, setUserPendingDelete] = useState<string | null>(null);
+
+  // Persist local operators directory
+  useEffect(() => {
+    localStorage.setItem('trainer_sandbox_users', JSON.stringify(localUsers));
+  }, [localUsers]);
+
+  const recordLoginHistory = async (username: string, role: string, success: boolean) => {
+    const now = new Date();
+    const logId = `login_${now.getTime()}_${Math.random().toString(36).slice(2, 6)}`;
+    const logEntry = {
+      id: logId,
+      username,
+      role,
+      success,
+      timestamp: now.toISOString(),
+      userAgent: navigator.userAgent || 'unknown_agent'
+    };
+
+    // 1. Local Storage
+    try {
+      const localHistoryData = localStorage.getItem('local_login_history');
+      const list = localHistoryData ? JSON.parse(localHistoryData) : [];
+      localStorage.setItem('local_login_history', JSON.stringify([logEntry, ...list]));
+    } catch (err) {
+      console.error('Failed writing login log to local storage:', err);
+    }
+
+    // 2. Supabase cloud storage
+    if (isSupabaseActive) {
+      try {
+        await supabase.from('login_history').insert([{
+          id: logId,
+          username,
+          role,
+          success,
+          user_agent: navigator.userAgent || 'unknown_agent',
+          created_at: now.toISOString()
+        }]);
+      } catch (err) {
+        console.warn('Notice writing login log to Supabase:', err);
+      }
+    }
+  };
+
+  const handleOfflineLogin = (username: string, passwordText: string) => {
+    const cleanUser = username.trim().toLowerCase();
+    const matched = localUsers.find(u => u.username.toLowerCase() === cleanUser && u.passwordText === passwordText);
+    if (!matched) {
+      recordLoginHistory(username, 'unknown', false);
+      return { success: false, error: 'Invalid username or access password.' };
+    }
+    setCurrentOfflineUser(matched);
+    localStorage.setItem('trainer_logged_in_user', JSON.stringify(matched));
+    recordLoginHistory(matched.username, matched.role, true);
+    return { success: true };
+  };
+
+  const handleOfflineLogout = () => {
+    setCurrentOfflineUser(null);
+    localStorage.removeItem('trainer_logged_in_user');
+    setIsTestActive(false);
+    setTestComplete(false);
+  };
+
+  const handleCreateTraineeUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setUserCreationError(null);
+    setUserCreationSuccess(null);
+
+    const cleanUsername = newTraineeUsername.trim();
+    const cleanPassword = newTraineePassword.trim();
+
+    if (!cleanUsername || cleanUsername.length < 3) {
+      setUserCreationError('Username must be at least 3 characters long.');
+      return;
+    }
+
+    if (!cleanPassword || cleanPassword.length < 3) {
+      setUserCreationError('Password must be at least 3 characters long.');
+      return;
+    }
+
+    const usernameLower = cleanUsername.toLowerCase();
+    const isDuplicate = localUsers.some(u => u.username.toLowerCase() === usernameLower);
+    if (isDuplicate) {
+      setUserCreationError(`User account "${cleanUsername}" already exists in operator registry.`);
+      return;
+    }
+
+    const newOperator = {
+      username: cleanUsername,
+      passwordText: cleanPassword,
+      role: 'trainee',
+      createdAt: new Date().toISOString().split('T')[0]
+    };
+
+    const updatedUsers = [...localUsers, newOperator];
+    setLocalUsers(updatedUsers);
+    try {
+      sessionStorage.setItem('cached_sandbox_users', JSON.stringify({
+        timestamp: Date.now(),
+        data: updatedUsers
+      }));
+    } catch {}
+
+    if (isSupabaseActive) {
+      try {
+        const userPayload = {
+          username: cleanUsername,
+          password_text: cleanPassword,
+          role: 'trainee',
+          created_at: new Date().toISOString()
+        };
+        await supabase.from('sandbox_users').upsert(userPayload);
+      } catch (err) {
+        console.warn('Failed to sync new trainee profile to Supabase:', err);
+      }
+    }
+
+    setNewTraineeUsername('');
+    setNewTraineePassword('');
+    setUserCreationSuccess(`Successfully created trainee operator account: "${cleanUsername}".`);
+  };
+
+  const handleBatchCreateOperators = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setUserCreationError(null);
+    setUserCreationSuccess(null);
+
+    const lines = bulkInputText
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => l.length > 0);
+
+    if (lines.length === 0) {
+      setUserCreationError('Please enter at least one operator username or row.');
+      return;
+    }
+
+    const defaultPass = bulkDefaultPass.trim() || 'trainee123';
+    const today = new Date().toISOString().split('T')[0];
+
+    const existingUsernamesLower = new Set(localUsers.map(u => u.username.toLowerCase()));
+    const createdUsers: any[] = [];
+    const skippedUsers: string[] = [];
+    const invalidFormatUsers: string[] = [];
+
+    for (const rawLine of lines) {
+      let uname = '';
+      let pass = defaultPass;
+
+      if (rawLine.includes(',') || rawLine.includes('\t')) {
+        const parts = rawLine.split(/[,\\t]+/).map(p => p.trim());
+        uname = parts[0];
+        if (parts[1] && parts[1].length > 0) {
+          pass = parts[1];
+        }
+      } else {
+        uname = rawLine;
+      }
+
+      if (!uname || uname.length < 3) {
+        invalidFormatUsers.push(rawLine);
+        continue;
+      }
+
+      const unameLower = uname.toLowerCase();
+      if (existingUsernamesLower.has(unameLower)) {
+        skippedUsers.push(uname);
+        continue;
+      }
+
+      createdUsers.push({
+        username: uname,
+        passwordText: pass,
+        role: 'trainee',
+        createdAt: today
+      });
+      existingUsernamesLower.add(unameLower);
+    }
+
+    if (createdUsers.length === 0) {
+      let errText = 'No new valid operator profiles were identified.';
+      if (skippedUsers.length > 0) {
+        errText += ` Skipped duplicates: ${skippedUsers.join(', ')}.`;
+      }
+      if (invalidFormatUsers.length > 0) {
+        errText += ` Invalid format or too short (<3 chars): ${invalidFormatUsers.join(', ')}.`;
+      }
+      setUserCreationError(errText);
+      return;
+    }
+
+    // 1. Sync to memory & Local Storage
+    const allUsersBatch = [...localUsers, ...createdUsers];
+    setLocalUsers(allUsersBatch);
+    try {
+      sessionStorage.setItem('cached_sandbox_users', JSON.stringify({
+        timestamp: Date.now(),
+        data: allUsersBatch
+      }));
+    } catch {}
+
+    // 2. Sync to Supabase in parallel
+    if (isSupabaseActive) {
+      try {
+        const payloads = createdUsers.map((user) => ({
+          username: user.username,
+          password_text: user.passwordText,
+          role: user.role,
+          created_at: new Date().toISOString()
+        }));
+        await supabase.from('sandbox_users').upsert(payloads);
+      } catch (err) {
+        console.warn('Failed to batch sync profiles to Supabase database:', err);
+        setUserCreationError('Profiles written locally, but some failed cloud database synchronization.');
+      }
+    }
+
+    setBulkInputText('');
+    
+    let successMsg = `Successfully batch-provisioned ${createdUsers.length} trainee operator accounts.`;
+    if (skippedUsers.length > 0) {
+      successMsg += ` Skipped ${skippedUsers.length} duplicates.`;
+    }
+    if (invalidFormatUsers.length > 0) {
+      successMsg += ` (Failed to import ${invalidFormatUsers.length} rows due to invalid formats).`;
+    }
+    setUserCreationSuccess(successMsg);
+  };
+
+  const handleDeleteTraineeUser = async (uname: string, force?: boolean) => {
+    if (uname.toLowerCase() === 'admin') {
+      setUserCreationError('The root system admin account is permanent.');
+      return;
+    }
+    
+    if (force || userPendingDelete === uname) {
+      const unameLower = uname.toLowerCase();
+      const filteredUsers = localUsers.filter(u => u.username.toLowerCase() !== unameLower);
+      setLocalUsers(filteredUsers);
+      try {
+        sessionStorage.setItem('cached_sandbox_users', JSON.stringify({
+          timestamp: Date.now(),
+          data: filteredUsers
+        }));
+      } catch {}
+      
+      if (isSupabaseActive) {
+        try {
+          await supabase.from('sandbox_users').delete().eq('username', uname);
+        } catch (err) {
+          console.warn('Failed to delete profile from Supabase:', err);
+        }
+      }
+
+      setUserCreationSuccess(`Removed trainee operator: "${uname}".`);
+      setUserPendingDelete(null);
+    } else {
+      setUserPendingDelete(uname);
+      setTimeout(() => {
+        setUserPendingDelete(current => current === uname ? null : current);
+      }, 5000);
+    }
+  };
+
+  // Setup tabs selection: 3 Training Categories + Admin Users Management
+  const [activeSetupTab, setActiveSetupTab] = useState<'tax_number' | 'date_number' | 'phone_number' | 'users'>('tax_number');
+  const [activeTrainingCategory, setActiveTrainingCategory] = useState<TrainingCategory>('tax_number');
+  
+  // Custom invoices uploaded from local system (multi-category support)
+  const [customInvoices, setCustomInvoices] = useState<(GeneratedInvoiceData & { customImageUrl?: string })[]>(() => {
+    try {
+      const saved = localStorage.getItem('custom_uploaded_invoices');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return parsed.map((item: any) => ({
+          ...item,
+          category: item.category || 'tax_number'
+        }));
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Custom invoice creation fields states
+  const [customExpectedCode, setCustomExpectedCode] = useState<string>('');
+  const [customCompanyName, setCustomCompanyName] = useState<string>('');
+  const [uploadProgressError, setUploadProgressError] = useState<string | null>(null);
+  
+  // Custom bulk labeling & previewing indices
+  const [labelingModalIndex, setLabelingModalIndex] = useState<number | null>(null);
+
+  // Core Speed Test States
+  const [isTestActive, setIsTestActive] = useState<boolean>(false);
+  const [trainingMode, setTrainingMode] = useState<TrainingMode>('easy_20');
+  const [isConfirmingCancel, setIsConfirmingCancel] = useState<boolean>(false);
+  const [currentIndex, setCurrentIndex] = useState<number>(0);
+  const [expectedDataset, setExpectedDataset] = useState<GeneratedInvoiceData[]>([]);
+  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  
+  // Timer States
+  const [elapsedMs, setElapsedMs] = useState<number>(0);
+  const startTimeRef = useRef<number>(0);
+  const timerIntervalRef = useRef<number | null>(null);
+
+  // Active Typist Input Form Values
+  const [typedValue, setTypedValue] = useState<string>('');
+  const [lastCharacterValid, setLastCharacterValid] = useState<boolean | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Session stats lists
+  const [sessionResults, setSessionResults] = useState<TypingDetail[]>([]);
+  const [correctCount, setCorrectCount] = useState<number>(0);
+  const [averageTimeMs, setAverageTimeMs] = useState<number>(0);
+
+  // Page level display state managers
+  const [testComplete, setTestComplete] = useState<boolean>(false);
+  const [, setIsSaving] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [cheatTriggerMsg, setCheatTriggerMsg] = useState<string | null>(null);
+  const [latestSessionByMe, setLatestSessionByMe] = useState<any>(null);
+  const [isRefreshingInvoices, setIsRefreshingInvoices] = useState<boolean>(false);
+
+  const TEN_MINUTES_MS = 10 * 60 * 1000;
+
+  useEffect(() => {
+    if (!currentOfflineUser || isTestActive) {
+      if (!currentOfflineUser) setLatestSessionByMe(null);
+      return;
+    }
+    const loadLatestSession = async () => {
+      const activeUserId = currentOfflineUser.username;
+      
+      // 1. Try local cache first
+      let localLatest: any = null;
+      try {
+        const localData = localStorage.getItem('local_test_sessions');
+        if (localData) {
+          const sList = JSON.parse(localData);
+          const filtered = sList.filter((s: any) => s.userId === activeUserId);
+          if (filtered.length > 0) {
+            localLatest = filtered[0];
+          }
+        }
+      } catch (err) {
+        console.warn('Error reading local session history:', err);
+      }
+
+      // 2. Check session cache for latest cloud session (avoids redundant reads across components)
+      const sessionCacheKey = `cached_latest_session_${activeUserId}`;
+      try {
+        const cachedRaw = sessionStorage.getItem(sessionCacheKey);
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw);
+          const ageMs = Date.now() - (cached.timestamp || 0);
+          if (ageMs < TEN_MINUTES_MS && cached.data) {
+            setLatestSessionByMe({
+              ...cached.data,
+              timestamp: new Date(cached.data.timestamp)
+            });
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Notice reading session cache for latest session:', err);
+      }
+      
+      // 3. Query Supabase only if cache empty and not in active test run
+      if (isSupabaseActive && activeUserId !== 'sandbox_guest_uid' && !isTestActive) {
+        try {
+          const { data, error } = await supabase
+            .from('test_sessions')
+            .select('*')
+            .or(`user_id.eq.${activeUserId},operator_id.eq.${activeUserId}`)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (!error && data && data.length > 0) {
+            const firstRow = data[0];
+            const timestampDate = firstRow.created_at ? new Date(firstRow.created_at) : (firstRow.timestamp ? new Date(firstRow.timestamp) : new Date());
+            const avgSec = (firstRow.average_time_ms || firstRow.averageTimeMs || 0) / 1000;
+            const category: TrainingCategory = firstRow.category || 'tax_number';
+            let computedLvl = firstRow.level || 'D';
+            if (!firstRow.level) {
+              if (category === 'date_number') {
+                if (avgSec <= 2.0) computedLvl = 'A';
+                else if (avgSec <= 2.8) computedLvl = 'B';
+                else if (avgSec <= 3.6) computedLvl = 'C';
+              } else if (category === 'phone_number') {
+                if (avgSec <= 2.5) computedLvl = 'A';
+                else if (avgSec <= 3.5) computedLvl = 'B';
+                else if (avgSec <= 4.5) computedLvl = 'C';
+              } else {
+                if (avgSec <= 3.0) computedLvl = 'A';
+                else if (avgSec <= 4.0) computedLvl = 'B';
+                else if (avgSec <= 5.0) computedLvl = 'C';
+              }
+            }
+
+            const sessionObj = {
+              id: firstRow.id,
+              userId: firstRow.user_id || firstRow.userId || activeUserId,
+              operatorId: firstRow.operator_id || firstRow.operatorId || activeUserId,
+              totalImagesAttempted: firstRow.total_attempted ?? firstRow.totalImagesAttempted ?? 20,
+              correctEntries: firstRow.correct_entries ?? firstRow.correctEntries ?? 0,
+              averageTimeMs: firstRow.average_time_ms ?? firstRow.averageTimeMs ?? 0,
+              averageSpeed: firstRow.average_speed ?? firstRow.averageSpeed ?? (avgSec > 0 ? +avgSec.toFixed(2) : 0),
+              accuracy: firstRow.accuracy ?? 100,
+              level: computedLvl,
+              trainingMode: firstRow.training_mode || firstRow.trainingMode || 'easy_20',
+              category,
+              details: firstRow.details || [],
+              timestamp: timestampDate
+            };
+
+            setLatestSessionByMe(sessionObj);
+            try {
+              sessionStorage.setItem(sessionCacheKey, JSON.stringify({
+                timestamp: Date.now(),
+                data: sessionObj
+              }));
+            } catch {}
+            return;
+          }
+        } catch (err) {
+          console.warn('Notice reading latest session from Supabase:', err);
+        }
+      }
+      
+      if (localLatest) {
+        const evaluatedAvgSec = localLatest.averageTimeMs / 1000;
+        const category: TrainingCategory = localLatest.category || 'tax_number';
+        let computedLvl = 'D';
+        if (category === 'date_number') {
+          if (evaluatedAvgSec <= 2.0) computedLvl = 'A';
+          else if (evaluatedAvgSec <= 2.8) computedLvl = 'B';
+          else if (evaluatedAvgSec <= 3.6) computedLvl = 'C';
+        } else if (category === 'phone_number') {
+          if (evaluatedAvgSec <= 2.5) computedLvl = 'A';
+          else if (evaluatedAvgSec <= 3.5) computedLvl = 'B';
+          else if (evaluatedAvgSec <= 4.5) computedLvl = 'C';
+        } else {
+          if (evaluatedAvgSec <= 3.0) computedLvl = 'A';
+          else if (evaluatedAvgSec <= 4.0) computedLvl = 'B';
+          else if (evaluatedAvgSec <= 5.0) computedLvl = 'C';
+        }
+
+        setLatestSessionByMe({
+          ...localLatest,
+          timestamp: new Date(localLatest.timestamp),
+          level: computedLvl,
+          category
+        });
+      }
+    };
+    loadLatestSession();
+  }, [currentOfflineUser, refreshTrigger, isTestActive]);
+
+  const fetchSandboxUsers = async (forceRefresh = false) => {
+    // Check session cache first
+    if (!forceRefresh) {
+      try {
+        const cachedRaw = sessionStorage.getItem('cached_sandbox_users');
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw);
+          const ageMs = Date.now() - (cached.timestamp || 0);
+          if (ageMs < TEN_MINUTES_MS && Array.isArray(cached.data) && cached.data.length > 0) {
+            setLocalUsers(cached.data);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Notice reading cached sandbox users:', err);
+      }
+    }
+
+    if (isSupabaseActive && !isTestActive) {
+      try {
+        const { data, error } = await supabase.from('sandbox_users').select('*');
+        if (error) {
+          throw error;
+        }
+        
+        if (data && data.length > 0) {
+          const users = data.map((u: any) => ({
+            username: u.username,
+            passwordText: u.password_text || u.passwordText || 'guest',
+            role: u.role || 'trainee',
+            createdAt: u.created_at || u.createdAt || new Date().toISOString().split('T')[0]
+          }));
+          setLocalUsers(users);
+          try {
+            sessionStorage.setItem('cached_sandbox_users', JSON.stringify({
+              timestamp: Date.now(),
+              data: users
+            }));
+          } catch {}
+        } else {
+          const defaultUsers = [
+            { username: 'admin', passwordText: 'admin', role: 'admin', createdAt: '2026-05-22' },
+            { username: 'guest', passwordText: 'guest', role: 'trainee', createdAt: '2026-05-22' }
+          ];
+          for (const u of defaultUsers) {
+            await supabase.from('sandbox_users').upsert({
+              username: u.username,
+              password_text: u.passwordText,
+              role: u.role,
+              created_at: u.createdAt
+            });
+          }
+          setLocalUsers(defaultUsers);
+          try {
+            sessionStorage.setItem('cached_sandbox_users', JSON.stringify({
+              timestamp: Date.now(),
+              data: defaultUsers
+            }));
+          } catch {}
+        }
+      } catch (err) {
+        console.warn('Notice loading sandbox users from Supabase:', err);
+      }
+    }
+  };
+
+  const fetchCustomInvoices = async (forceRefresh = false) => {
+    // 1. Strict Session Caching: If cached within 10 minutes and not force refreshing, load directly from memory/sessionStorage
+    if (!forceRefresh) {
+      try {
+        const cachedRaw = sessionStorage.getItem('cached_cloud_invoices');
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw);
+          const ageMs = Date.now() - (cached.timestamp || 0);
+          if (ageMs < TEN_MINUTES_MS && Array.isArray(cached.data)) {
+            if (cached.data.length > 0) {
+              setCustomInvoices(cached.data);
+            }
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Notice reading cached custom invoices:', err);
+      }
+    }
+
+    if (forceRefresh) {
+      setIsRefreshingInvoices(true);
+    }
+
+    // 2. Query Supabase
+    if (isSupabaseActive && !isTestActive) {
+      try {
+        const { data, error } = await supabase.from('custom_invoices').select('*');
+        if (error) {
+          throw error;
+        }
+
+        if (data && Array.isArray(data)) {
+          const invoices = data.map((row: any) => ({
+            id: row.id,
+            expectedNumber: row.expected_number || row.expectedNumber || '',
+            companyName: row.company_name || row.companyName || 'Custom Vendor',
+            invoiceDate: row.invoice_date || row.invoiceDate || '',
+            totalAmount: row.total_amount || row.totalAmount || '',
+            difficulty: row.difficulty || 'medium',
+            style: row.style || 'modern',
+            customImageUrl: row.custom_image_url || row.customImageUrl || '',
+            category: row.category || 'tax_number'
+          }));
+          if (invoices.length > 0) {
+            setCustomInvoices(invoices);
+            try {
+              localStorage.setItem('custom_uploaded_invoices', JSON.stringify(invoices));
+            } catch {}
+          }
+          try {
+            sessionStorage.setItem('cached_cloud_invoices', JSON.stringify({
+              timestamp: Date.now(),
+              data: invoices
+            }));
+          } catch {}
+        }
+      } catch (err) {
+        console.warn('Notice loading custom invoices from Supabase:', err);
+      } finally {
+        if (forceRefresh) {
+          setIsRefreshingInvoices(false);
+        }
+      }
+    } else {
+      if (forceRefresh) {
+        setIsRefreshingInvoices(false);
+      }
+    }
+  };
+
+  // Initial load on mount
+  useEffect(() => {
+    fetchSandboxUsers();
+    fetchCustomInvoices();
+  }, []);
+
+  // Sync state loops to increment active item chronometer clock
+  useEffect(() => {
+    if (isTestActive) {
+      startTimeRef.current = performance.now();
+      setElapsedMs(0);
+
+      // Start the display tick updates
+      timerIntervalRef.current = window.setInterval(() => {
+        const delta = performance.now() - startTimeRef.current;
+        setElapsedMs(Math.round(delta));
+      }, 37) as unknown as number;
+    }
+
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+    };
+  }, [currentIndex, isTestActive]);
+
+  // Handle automatic autofocus when image state changes
+  useEffect(() => {
+    if (isTestActive && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [currentIndex, isTestActive]);
+
+  /**
+   * Initializes a speed testing session using the uploaded invoices library for a specific category.
+   * If fewer than the target count (180, 90, or 20) images exist in that category pool,
+   * automatically duplicates and shuffles existing images with unique runtime queue indices to form a seamless queue.
+   */
+  const startCategoryTestingSession = (category: TrainingCategory, mode: TrainingMode = 'normal_90') => {
+    setActiveTrainingCategory(category);
+    setTrainingMode(mode);
+    setCheatTriggerMsg(null);
+    setSaveError(null);
+
+    // Filter available invoices for the requested category
+    let pool = customInvoices.filter(inv => (inv.category || 'tax_number') === category);
+
+    // If pool is empty, auto-seed with sample invoices for immediate testing experience
+    if (pool.length === 0) {
+      const seedItems: (GeneratedInvoiceData & { customImageUrl: string })[] = [];
+      for (let i = 1; i <= 5; i++) {
+        const sample = generateSampleCustomInvoice(category, i);
+        seedItems.push(sample);
+      }
+      pool = seedItems;
+      const updatedAll = [...customInvoices, ...seedItems];
+      setCustomInvoices(updatedAll);
+      localStorage.setItem('custom_uploaded_invoices', JSON.stringify(updatedAll));
+    }
+
+    const targetCount = mode === 'hard_180' ? 180 : mode === 'easy_20' ? 20 : 90;
+    let queue: (GeneratedInvoiceData & { customImageUrl?: string })[] = [];
+
+    if (pool.length >= targetCount) {
+      const shuffled = [...pool].sort(() => Math.random() - 0.5);
+      queue = shuffled.slice(0, targetCount);
+    } else {
+      let counter = 0;
+      while (queue.length < targetCount) {
+        const round = [...pool].sort(() => Math.random() - 0.5);
+        for (const item of round) {
+          if (queue.length >= targetCount) break;
+          counter++;
+          queue.push({
+            ...item,
+            category,
+            id: `${item.id}_q${counter}_${Math.random().toString(36).substring(2, 6)}`
+          });
+        }
+      }
+    }
+
+    setExpectedDataset(queue);
+    
+    // Map of URLs
+    const urls: Record<string, string> = {};
+    queue.forEach(item => {
+      urls[item.id] = item.customImageUrl || renderReceiptToDataUrl(item);
+    });
+    setImageUrls(urls);
+    
+    setSessionResults([]);
+    setCorrectCount(0);
+    setAverageTimeMs(0);
+    setCurrentIndex(0);
+    setTypedValue('');
+    setTestComplete(false);
+    setIsConfirmingCancel(false);
+    setIsTestActive(true);
+
+    if (queue.length > 1) {
+      const preloadImg = new Image();
+      preloadImg.src = urls[queue[1].id];
+    }
+  };
+
+  /**
+   * Repeats the speed testing session while preserving the exact active category and training mode.
+   */
+  const handleRunAgain = () => {
+    startCategoryTestingSession(activeTrainingCategory, trainingMode);
+  };
+
+  /**
+   * Emergency abort to cancel the active testing session and return to dashboard.
+   */
+  const handleCancelTestingSession = () => {
+    setIsTestActive(false);
+    setTestComplete(false);
+    setCurrentIndex(0);
+    setTypedValue('');
+    setSessionResults([]);
+    setCorrectCount(0);
+    setAverageTimeMs(0);
+    setIsConfirmingCancel(false);
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+  };
+
+  /**
+   * Reads user uploaded invoice images and adds them to the testing pool under the target category.
+   * Auto-extracts category-specific codes from filenames (13-digit tax, 8-digit date, 10-11-digit phone).
+   */
+  const handleCustomImagesUpload = async (files: FileList | File[], category: TrainingCategory = activeTrainingCategory) => {
+    setUploadProgressError(null);
+    const fileArray = Array.from(files);
+    
+    if (fileArray.length === 0) return;
+
+    const imageFiles = fileArray.filter(file => file.type.startsWith('image/'));
+    if (imageFiles.length === 0) {
+      setUploadProgressError('Invalid file format. Please upload standard image files (PNG/JPG/WEBP).');
+      return;
+    }
+
+    const newItems: (GeneratedInvoiceData & { customImageUrl: string })[] = [];
+
+    const readPromises = imageFiles.map((file, idx) => {
+      return new Promise<void>((resolve) => {
+        if (file.size > 3 * 1024 * 1024) {
+          resolve();
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = () => {
+          const base64Url = reader.result as string;
+          const customId = `cust_${category}_${Date.now().toString().slice(-4)}_${idx}_${Math.floor(Math.random() * 1000)}`;
+          
+          let expected = '';
+
+          if (category === 'tax_number') {
+            const tMatch = file.name.match(/T\d{13}/i);
+            if (tMatch) {
+              expected = tMatch[0].toUpperCase();
+            } else {
+              const digitMatch = file.name.match(/\d{13}/);
+              if (digitMatch) {
+                expected = `T${digitMatch[0]}`;
+              }
+            }
+            if (!expected) expected = customExpectedCode.trim().toUpperCase();
+            if (!expected) expected = generateRandomInvoiceNumber();
+          } else if (category === 'date_number') {
+            const dateMatch = file.name.match(/20\d{6}/) || file.name.match(/\d{8}/);
+            if (dateMatch) {
+              expected = dateMatch[0];
+            }
+            if (!expected) expected = customExpectedCode.trim().replace(/\D/g, '');
+            if (!expected || expected.length !== 8) expected = generateRandomDateNumber();
+          } else if (category === 'phone_number') {
+            const phoneMatch = file.name.match(/0\d{9,10}/) || file.name.match(/\d{10,11}/);
+            if (phoneMatch) {
+              expected = phoneMatch[0];
+            }
+            if (!expected) expected = customExpectedCode.trim().replace(/\D/g, '');
+            if (!expected || (expected.length !== 10 && expected.length !== 11)) expected = generateRandomPhoneNumber();
+          }
+
+          let company = customCompanyName.trim();
+          if (!company) {
+            const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
+            company = nameWithoutExt.substring(0, 24);
+          }
+
+          const newItem: GeneratedInvoiceData & { customImageUrl: string } = {
+            id: customId,
+            category,
+            expectedNumber: expected,
+            companyName: company || `Custom Upload ${idx + 1}`,
+            invoiceDate: new Date().toLocaleDateString('ja-JP'),
+            totalAmount: `${(2000 + Math.floor(Math.random() * 8000)).toLocaleString()}円`,
+            difficulty: 'medium',
+            style: 'modern',
+            customImageUrl: base64Url
+          };
+
+          newItems.push(newItem);
+          resolve();
+        };
+
+        reader.onerror = () => resolve();
+        reader.readAsDataURL(file);
+      });
+    });
+
+    await Promise.all(readPromises);
+
+    if (newItems.length === 0) {
+      setUploadProgressError('Could not process images. Ensure files are under 3MB.');
+      return;
+    }
+
+    const updated = [...customInvoices, ...newItems];
+    setCustomInvoices(updated);
+
+    try {
+      localStorage.setItem('custom_uploaded_invoices', JSON.stringify(updated));
+    } catch (err) {
+      console.warn('LocalStorage quota exceeded:', err);
+    }
+    try {
+      sessionStorage.setItem('cached_cloud_invoices', JSON.stringify({
+        timestamp: Date.now(),
+        data: updated
+      }));
+    } catch {}
+
+    if (isSupabaseActive) {
+      try {
+        const invoicePayloads = newItems.map(item => ({
+          id: item.id,
+          expected_number: item.expectedNumber,
+          company_name: item.companyName,
+          invoice_date: item.invoiceDate || '',
+          total_amount: item.totalAmount || '',
+          difficulty: item.difficulty || 'medium',
+          style: item.style || 'modern',
+          custom_image_url: item.customImageUrl,
+          category: item.category || 'tax_number'
+        }));
+        await supabase.from('custom_invoices').upsert(invoicePayloads);
+      } catch (err) {
+        console.warn('Failed to sync uploaded invoices to Supabase database:', err);
+      }
+    }
+
+    setCustomExpectedCode('');
+    setCustomCompanyName('');
+  };
+
+  /**
+   * Generates a realistic sample invoice in-memory for the target category
+   */
+  const handleAddSampleToCustomList = async (category: TrainingCategory = activeTrainingCategory) => {
+    const categoryCount = customInvoices.filter(i => (i.category || 'tax_number') === category).length + 1;
+    const newCustom = generateSampleCustomInvoice(category, categoryCount);
+    
+    const updated = [...customInvoices, newCustom];
+    setCustomInvoices(updated);
+    localStorage.setItem('custom_uploaded_invoices', JSON.stringify(updated));
+    try {
+      sessionStorage.setItem('cached_cloud_invoices', JSON.stringify({
+        timestamp: Date.now(),
+        data: updated
+      }));
+    } catch {}
+
+    if (isSupabaseActive) {
+      try {
+        const invoicePayload = {
+          id: newCustom.id,
+          expected_number: newCustom.expectedNumber,
+          company_name: newCustom.companyName,
+          invoice_date: newCustom.invoiceDate || '',
+          total_amount: newCustom.totalAmount || '',
+          difficulty: newCustom.difficulty || 'medium',
+          style: newCustom.style || 'modern',
+          custom_image_url: newCustom.customImageUrl,
+          category: newCustom.category || 'tax_number'
+        };
+        await supabase.from('custom_invoices').upsert(invoicePayload);
+      } catch (err) {
+        console.warn('Failed to sync sample invoice to Supabase database:', err);
+      }
+    }
+  };
+
+  /**
+   * Clears all custom invoices in a specific category
+   */
+  const handleClearCategoryPool = async (category: TrainingCategory) => {
+    const updated = customInvoices.filter(item => (item.category || 'tax_number') !== category);
+    setCustomInvoices(updated);
+    localStorage.setItem('custom_uploaded_invoices', JSON.stringify(updated));
+    try {
+      sessionStorage.setItem('cached_cloud_invoices', JSON.stringify({
+        timestamp: Date.now(),
+        data: updated
+      }));
+    } catch {}
+
+    if (isSupabaseActive) {
+      try {
+        await supabase.from('custom_invoices').delete().eq('category', category);
+      } catch (err) {
+        console.warn('Failed to clear custom invoices from Supabase:', err);
+      }
+    }
+  };
+
+  /**
+   * Removes a single invoice from the custom pool
+   */
+  const handleDeleteCustomInvoice = async (id: string) => {
+    const updated = customInvoices.filter(item => item.id !== id);
+    setCustomInvoices(updated);
+    localStorage.setItem('custom_uploaded_invoices', JSON.stringify(updated));
+    try {
+      sessionStorage.setItem('cached_cloud_invoices', JSON.stringify({
+        timestamp: Date.now(),
+        data: updated
+      }));
+    } catch {}
+
+    if (isSupabaseActive) {
+      try {
+        await supabase.from('custom_invoices').delete().eq('id', id);
+      } catch (err) {
+        console.warn('Failed to delete custom invoice from Supabase:', err);
+      }
+    }
+  };
+
+  /**
+   * Updates expected transcribed code for a custom invoice
+   */
+  const updateCustomInvoiceCode = async (id: string, newCode: string) => {
+    const formattedCode = newCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const updated = customInvoices.map(inv => {
+      if (inv.id === id) {
+        return { ...inv, expectedNumber: formattedCode };
+      }
+      return inv;
+    });
+    setCustomInvoices(updated);
+    try {
+      localStorage.setItem('custom_uploaded_invoices', JSON.stringify(updated));
+    } catch {}
+    try {
+      sessionStorage.setItem('cached_cloud_invoices', JSON.stringify({
+        timestamp: Date.now(),
+        data: updated
+      }));
+    } catch {}
+
+    const matched = updated.find(inv => inv.id === id);
+    if (isSupabaseActive && matched) {
+      try {
+        await supabase.from('custom_invoices').upsert({
+          id: matched.id,
+          expected_number: matched.expectedNumber,
+          company_name: matched.companyName,
+          invoice_date: matched.invoiceDate || '',
+          total_amount: matched.totalAmount || '',
+          difficulty: matched.difficulty || 'medium',
+          style: matched.style || 'modern',
+          custom_image_url: matched.customImageUrl,
+          category: matched.category || 'tax_number'
+        });
+      } catch (err) {
+        console.warn('Failed to update expected number in Supabase:', err);
+      }
+    }
+  };
+
+  /**
+   * Updates company name for a custom invoice
+   */
+  const updateCustomInvoiceCompany = async (id: string, newCompany: string) => {
+    const updated = customInvoices.map(inv => {
+      if (inv.id === id) {
+        return { ...inv, companyName: newCompany };
+      }
+      return inv;
+    });
+    setCustomInvoices(updated);
+    try {
+      localStorage.setItem('custom_uploaded_invoices', JSON.stringify(updated));
+    } catch {}
+    try {
+      sessionStorage.setItem('cached_cloud_invoices', JSON.stringify({
+        timestamp: Date.now(),
+        data: updated
+      }));
+    } catch {}
+
+    const matched = updated.find(inv => inv.id === id);
+    if (isSupabaseActive && matched) {
+      try {
+        await supabase.from('custom_invoices').upsert({
+          id: matched.id,
+          expected_number: matched.expectedNumber,
+          company_name: matched.companyName,
+          invoice_date: matched.invoiceDate || '',
+          total_amount: matched.totalAmount || '',
+          difficulty: matched.difficulty || 'medium',
+          style: matched.style || 'modern',
+          custom_image_url: matched.customImageUrl,
+          category: matched.category || 'tax_number'
+        });
+      } catch (err) {
+        console.warn('Failed to update company name in Supabase:', err);
+      }
+    }
+  };
+
+  /**
+   * Image fully loaded callback in InvoiceViewer
+   */
+  const handleInvoiceImageOnLoad = () => {
+    startTimeRef.current = performance.now();
+  };
+
+  /**
+   * Category-aware input filtering & auto-advance handler
+   */
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawVal = e.target.value;
+    const currentInvoice = expectedDataset[currentIndex];
+    const category = currentInvoice?.category || activeTrainingCategory;
+    const expectedRaw = currentInvoice?.expectedNumber || '';
+    const sanitizedExpected = expectedRaw.replace(/[^a-zA-Z0-9]/g, '');
+
+    let cleaned = '';
+    let targetLength = 13;
+
+    if (category === 'tax_number') {
+      cleaned = rawVal.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+      const hasT = sanitizedExpected.toUpperCase().startsWith('T');
+      const inputHasT = cleaned.startsWith('T');
+      targetLength = (hasT && inputHasT) ? 14 : 13;
+    } else if (category === 'date_number' || category === 'phone_number') {
+      cleaned = rawVal.replace(/\D/g, '');
+      targetLength = sanitizedExpected.length;
+    }
+
+    setTypedValue(cleaned);
+
+    // Real-time character match feedback
+    if (cleaned.length > 0) {
+      if (category === 'tax_number') {
+        const expectedUpper = sanitizedExpected.toUpperCase();
+        if (expectedUpper.startsWith('T') && !cleaned.startsWith('T')) {
+          const withoutT = expectedUpper.substring(1);
+          setLastCharacterValid(withoutT.startsWith(cleaned));
+        } else {
+          setLastCharacterValid(expectedUpper.startsWith(cleaned));
+        }
+      } else {
+        const sanitizedExpectedDigits = sanitizedExpected.replace(/\D/g, '');
+        setLastCharacterValid(sanitizedExpectedDigits.startsWith(cleaned));
+      }
+    } else {
+      setLastCharacterValid(null);
+    }
+
+    // Auto-advance trigger
+    if (cleaned.length >= targetLength && targetLength > 0) {
+      verifyAndAdvanceSession(cleaned, category);
+    }
+  };
+
+  /**
+   * Evaluates speed capture and writes entry metrics, then advances to next invoice.
+   */
+  const verifyAndAdvanceSession = (typedText: string, category: TrainingCategory) => {
+    const endTimestamp = performance.now();
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+
+    const durationMs = Math.round(endTimestamp - startTimeRef.current);
+    const currentInvoice = expectedDataset[currentIndex];
+
+    // Sanitize values for comparison
+    const sanitizedExpected = currentInvoice.expectedNumber.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const sanitizedTyped = typedText.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    let isCorrect = false;
+    if (category === 'tax_number') {
+      isCorrect = (sanitizedExpected === sanitizedTyped) || 
+        (sanitizedExpected.endsWith(sanitizedTyped) && sanitizedTyped.length === 13);
+    } else if (category === 'date_number' || category === 'phone_number') {
+      const expDigits = currentInvoice.expectedNumber.replace(/\D/g, '');
+      const typDigits = typedText.replace(/\D/g, '');
+      isCorrect = (expDigits === typDigits);
+    } else {
+      isCorrect = (sanitizedExpected === sanitizedTyped);
+    }
+
+    const resultEntry: TypingDetail = {
+      imageId: currentInvoice.id,
+      expectedNumber: currentInvoice.expectedNumber,
+      typedNumber: typedText.toUpperCase(),
+      timeSpentMs: durationMs,
+      isCorrect,
+      category
+    };
+
+    const nextResults = [...sessionResults, resultEntry];
+    setSessionResults(nextResults);
+
+    let nextCorrectCount = correctCount;
+    if (isCorrect) {
+      nextCorrectCount += 1;
+      setCorrectCount(nextCorrectCount);
+    }
+
+    setTypedValue('');
+    setLastCharacterValid(null);
+
+    const nextIndex = currentIndex + 1;
+
+    if (nextIndex >= expectedDataset.length) {
+      finalizeSessionLog(nextResults, nextCorrectCount, category);
+    } else {
+      setCurrentIndex(nextIndex);
+      if (nextIndex + 1 < expectedDataset.length) {
+        const nextInvId = expectedDataset[nextIndex + 1].id;
+        const nextDataUri = imageUrls[nextInvId];
+        if (nextDataUri) {
+          const img = new Image();
+          img.src = nextDataUri;
+        }
+      }
+    }
+  };
+
+  /**
+   * Finalizes score aggregation and saves payload to local storage and Firestore.
+   */
+  const finalizeSessionLog = async (completedResults: TypingDetail[], finalCorrect: number, category: TrainingCategory) => {
+    setIsTestActive(false);
+    setTestComplete(true);
+
+    const totalMs = completedResults.reduce((acc, curr) => acc + curr.timeSpentMs, 0);
+    const avgMs = completedResults.length > 0 ? Math.round(totalMs / completedResults.length) : 0;
+    setAverageTimeMs(avgMs);
+
+    const calculatedLevel = evaluateCategoryLevel(avgMs, category);
+
+    setIsSaving(true);
+    setSaveError(null);
+
+    const activeUserId = currentOfflineUser ? currentOfflineUser.username : 'guest';
+    const accuracyPercent = completedResults.length > 0 ? Math.round((finalCorrect / completedResults.length) * 100) : 100;
+    const avgSpeedSec = +(avgMs / 1000).toFixed(2);
+
+    const rawPayload = {
+      userId: activeUserId,
+      operatorId: activeUserId,
+      totalImagesAttempted: completedResults.length,
+      correctEntries: finalCorrect,
+      averageTimeMs: avgMs,
+      averageSpeed: avgSpeedSec,
+      accuracy: accuracyPercent,
+      level: calculatedLevel,
+      trainingMode: trainingMode,
+      category: category,
+      details: completedResults.map(r => ({
+        imageId: r.imageId,
+        expectedNumber: r.expectedNumber,
+        typedNumber: r.typedNumber,
+        timeSpentMs: r.timeSpentMs,
+        isCorrect: r.isCorrect,
+        category: r.category || category
+      }))
+    };
+
+    const now = new Date();
+
+    // 1. Write to local storage
+    try {
+      const localData = localStorage.getItem('local_test_sessions');
+      const prevList = localData ? JSON.parse(localData) : [];
+      const localLogEntry = {
+        ...rawPayload,
+        timestamp: now.toISOString()
+      };
+      localStorage.setItem('local_test_sessions', JSON.stringify([localLogEntry, ...prevList]));
+    } catch (err) {
+      console.error('Failed writing locally:', err);
+    }
+
+    // 2. Upload to Supabase
+    if (isSupabaseActive && currentOfflineUser && activeUserId !== 'sandbox_guest_uid') {
+      const newSessionDocId = `session_${now.getTime()}`;
+      const activeCategory = category;
+
+      try {
+        await supabase.from('test_sessions').insert([{
+          id: newSessionDocId,
+          user_id: activeUserId,
+          operator_id: activeUserId,
+          category: activeCategory,
+          training_mode: trainingMode,
+          total_attempted: completedResults.length,
+          correct_entries: finalCorrect,
+          average_time_ms: avgMs,
+          average_speed: avgSpeedSec,
+          accuracy: accuracyPercent,
+          level: calculatedLevel,
+          details: completedResults
+        }]);
+      } catch (err) {
+        console.warn('Notice saving test session to Supabase:', err);
+        setSaveError('Cloud sync notice: Result safely saved in local offline history.');
+      }
+    }
+
+    const completedSessionObj = {
+      id: `session_${now.getTime()}`,
+      ...rawPayload,
+      timestamp: now,
+      level: calculatedLevel,
+      category
+    };
+    setLatestSessionByMe(completedSessionObj);
+    try {
+      sessionStorage.setItem(`cached_latest_session_${activeUserId}`, JSON.stringify({
+        timestamp: Date.now(),
+        data: completedSessionObj
+      }));
+    } catch {}
+
+    setIsSaving(false);
+    setRefreshTrigger(prev => prev + 1);
+  };
+
+  /**
+   * Anti-Cheating guards
+   */
+  const handlePastePrevent = (e: React.ClipboardEvent) => {
+    e.preventDefault();
+    setCheatTriggerMsg('Clipboard paste access is strictly security-blocked during testing.');
+    setTimeout(() => setCheatTriggerMsg(null), 4000);
+  };
+
+  const handleCopyPrevent = (e: React.ClipboardEvent) => {
+    e.preventDefault();
+    setCheatTriggerMsg('Text copy actions are disabled to prevent credential extraction.');
+    setTimeout(() => setCheatTriggerMsg(null), 4000);
+  };
+
+  // Determine typing tier dynamically by category
+  const evaluateRank = () => {
+    return getCategoryRankDetails(averageTimeMs, activeTrainingCategory);
+  };
+
+  const currentRank = evaluateRank();
+
+  const handleDownloadPDF = () => {
+    const rankDetails = getCategoryRankDetails(averageTimeMs, activeTrainingCategory);
+
+    const testSessionPayload: TestSession = {
+      userId: currentOfflineUser ? currentOfflineUser.username : 'guest',
+      operatorId: currentOfflineUser ? currentOfflineUser.username : 'guest',
+      timestamp: new Date(),
+      totalImagesAttempted: expectedDataset.length,
+      correctEntries: correctCount,
+      averageTimeMs: averageTimeMs,
+      averageSpeed: +(averageTimeMs / 1000).toFixed(2),
+      accuracy: expectedDataset.length > 0 ? Math.round((correctCount / expectedDataset.length) * 100) : 100,
+      level: rankDetails.level,
+      trainingMode: trainingMode,
+      category: activeTrainingCategory,
+      details: sessionResults
+    };
+
+    generateCertificatePDF(testSessionPayload, rankDetails.level, rankDetails.name);
+  };
+
+  const handleDownloadHTML = () => {
+    const rankDetails = getCategoryRankDetails(averageTimeMs, activeTrainingCategory);
+
+    const testSessionPayload: TestSession = {
+      userId: currentOfflineUser ? currentOfflineUser.username : 'guest',
+      operatorId: currentOfflineUser ? currentOfflineUser.username : 'guest',
+      timestamp: new Date(),
+      totalImagesAttempted: expectedDataset.length,
+      correctEntries: correctCount,
+      averageTimeMs: averageTimeMs,
+      averageSpeed: +(averageTimeMs / 1000).toFixed(2),
+      accuracy: expectedDataset.length > 0 ? Math.round((correctCount / expectedDataset.length) * 100) : 100,
+      level: rankDetails.level,
+      trainingMode: trainingMode,
+      category: activeTrainingCategory,
+      details: sessionResults
+    };
+
+    generateCertificateHTML(testSessionPayload, rankDetails.level, rankDetails.name);
+  };
+
+  // If user is not authenticated locally, show Login Screen
+  if (!currentOfflineUser) {
+    return (
+      <LoginScreen 
+        onLogin={handleOfflineLogin}
+        localUsers={localUsers}
+      />
+    );
+  }
+
+  // Active Category SLA target & label helpers
+  const categorySlaTarget = CATEGORY_SLA_CONFIG[activeTrainingCategory]?.levels.C.maxMs || 3700;
+  const categorySlaLimitSec = (categorySlaTarget / 1000).toFixed(1);
+
+  return (
+    <div className="min-h-screen flex flex-col bg-slate-100 text-slate-800 font-sans" id="speedtest-root">
+      {/* 1. Global Navigation Bar */}
+      <header className="h-14 bg-slate-900 text-white flex items-center justify-between px-6 border-b border-slate-800 sticky top-0 z-30 shrink-0 select-none">
+        <div className="flex items-center gap-4">
+          <div className="bg-indigo-500 w-8 h-8 rounded flex items-center justify-center font-bold text-sm text-white shadow-lg">DT</div>
+          <h1 className="text-xs sm:text-sm font-semibold tracking-wide uppercase">
+            Data Entry Speed Assessment <span className="text-slate-400 font-normal ml-2 hidden md:inline">// Multi-Category Benchmark Node</span>
+          </h1>
+        </div>
+        
+        {/* Auth status & Connection indicator */}
+        <div className="flex items-center gap-6 text-xs" id="authentication-widget">
+          <div className="flex flex-col items-end leading-none">
+            <span className="text-slate-400 uppercase tracking-tighter text-[9px] font-bold">Operator Profile</span>
+            <span className="font-bold text-indigo-400 mt-1 flex items-center gap-1.5">
+              {currentOfflineUser.username} 
+              <span className="text-[8px] font-mono bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded uppercase border border-indigo-500/30">
+                {currentOfflineUser.role}
+              </span>
+            </span>
+          </div>
+
+          <div className="w-px h-8 bg-slate-700 hidden sm:block"></div>
+
+          <div className="hidden sm:flex flex-col items-end leading-none">
+            <span className="text-slate-400 uppercase tracking-tighter text-[9px] font-bold">System Status</span>
+            <span className={`font-medium mt-1 flex items-center gap-1 font-mono ${isSupabaseActive ? 'text-emerald-400' : 'text-amber-400'}`}>
+              {isSupabaseActive ? '● Supabase.Online' : '● Offline.Local'}
+            </span>
+          </div>
+
+          <div className="w-px h-8 bg-slate-700"></div>
+
+          <button
+            onClick={handleOfflineLogout}
+            className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white transition text-[11px] font-bold uppercase cursor-pointer shadow-sm flex items-center gap-1"
+            title="Log Out Workstation"
+            id="logout-button"
+          >
+            <LogOut className="w-3.5 h-3.5 text-white" />
+            <span className="hidden sm:inline">Logout</span>
+          </button>
+        </div>
+      </header>
+
+      {/* 2. Main Workstation Area */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
+        
+        {/* Anti-paste Warning Overlay Card */}
+        {cheatTriggerMsg && (
+          <div className="bg-rose-950/40 text-rose-300 border border-rose-900/50 rounded-xl p-4 flex items-center space-x-3 animate-bounce">
+            <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0" />
+            <div>
+              <h4 className="font-bold text-xs uppercase tracking-wide">Security Restriction Active</h4>
+              <p className="text-xs mt-0.5">{cheatTriggerMsg}</p>
+            </div>
+          </div>
+        )}
+
+        {/* A. Benchmark configuration start panel */}
+        {!isTestActive && !testComplete && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6" id="setup-panel">
+            {/* Guide & Category Workspace column */}
+            <div className="lg:col-span-2 bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 flex flex-col justify-between shadow-sm animate-fade-in">
+              <div className="space-y-6">
+                {/* Dynamic Configuration Navigation Tabs (3 Training Categories + Admin Users) */}
+                <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 font-sans mb-4" role="tablist" aria-label="Workstation setup categories">
+                  <button
+                    onClick={() => { setActiveSetupTab('tax_number'); setUploadProgressError(null); }}
+                    role="tab"
+                    aria-selected={activeSetupTab === 'tax_number'}
+                    aria-label="Tax Number Training"
+                    className={`pb-3 px-1 sm:px-3 text-xs font-bold uppercase tracking-wider border-b-2 cursor-pointer transition flex items-center gap-1.5 shrink-0 ${
+                      activeSetupTab === 'tax_number'
+                        ? 'border-indigo-600 text-indigo-600 font-extrabold'
+                        : 'border-transparent text-slate-400 hover:text-slate-600'
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>🧾 Tax Number</span>
+                  </button>
+
+                  <button
+                    onClick={() => { setActiveSetupTab('date_number'); setUploadProgressError(null); }}
+                    role="tab"
+                    aria-selected={activeSetupTab === 'date_number'}
+                    aria-label="Date Number Training"
+                    className={`pb-3 px-1 sm:px-3 text-xs font-bold uppercase tracking-wider border-b-2 cursor-pointer transition flex items-center gap-1.5 shrink-0 ${
+                      activeSetupTab === 'date_number'
+                        ? 'border-indigo-600 text-indigo-600 font-extrabold'
+                        : 'border-transparent text-slate-400 hover:text-slate-600'
+                    }`}
+                  >
+                    <Calendar className="w-3.5 h-3.5" />
+                    <span>📅 Date Number</span>
+                  </button>
+
+                  <button
+                    onClick={() => { setActiveSetupTab('phone_number'); setUploadProgressError(null); }}
+                    role="tab"
+                    aria-selected={activeSetupTab === 'phone_number'}
+                    aria-label="Phone Number Training"
+                    className={`pb-3 px-1 sm:px-3 text-xs font-bold uppercase tracking-wider border-b-2 cursor-pointer transition flex items-center gap-1.5 shrink-0 ${
+                      activeSetupTab === 'phone_number'
+                        ? 'border-indigo-600 text-indigo-600 font-extrabold'
+                        : 'border-transparent text-slate-400 hover:text-slate-600'
+                    }`}
+                  >
+                    <Phone className="w-3.5 h-3.5" />
+                    <span>📞 Phone Number</span>
+                  </button>
+
+                  {currentOfflineUser?.role === 'admin' && (
+                    <button
+                      onClick={() => { setActiveSetupTab('users'); setUploadProgressError(null); }}
+                      role="tab"
+                      aria-selected={activeSetupTab === 'users'}
+                      aria-label="Trainee User Accounts"
+                      className={`pb-3 px-1 sm:px-3 text-xs font-bold uppercase tracking-wider border-b-2 cursor-pointer transition flex items-center gap-1.5 shrink-0 ${
+                        activeSetupTab === 'users'
+                          ? 'border-indigo-600 text-indigo-600 font-extrabold'
+                          : 'border-transparent text-slate-400 hover:text-slate-600'
+                      }`}
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                      <span>👥 Trainee User Accounts</span>
+                      <span className="ml-1 text-[9px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-bold uppercase">Admin</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Tab 1, 2, 3: Category Sandbox Workspaces */}
+                {activeSetupTab === 'tax_number' || activeSetupTab === 'date_number' || activeSetupTab === 'phone_number' ? (
+                  <CategorySandbox
+                    category={activeSetupTab}
+                    invoices={customInvoices.filter(i => (i.category || 'tax_number') === activeSetupTab)}
+                    allInvoices={customInvoices}
+                    onUploadImages={handleCustomImagesUpload}
+                    onAddSample={handleAddSampleToCustomList}
+                    onDeleteInvoice={handleDeleteCustomInvoice}
+                    onUpdateCode={updateCustomInvoiceCode}
+                    onUpdateCompany={updateCustomInvoiceCompany}
+                    onClearPool={handleClearCategoryPool}
+                    onOpenLabelingModal={(idx) => setLabelingModalIndex(idx)}
+                    onStartTest={startCategoryTestingSession}
+                    uploadProgressError={uploadProgressError}
+                    customExpectedCode={customExpectedCode}
+                    setCustomExpectedCode={setCustomExpectedCode}
+                    customCompanyName={customCompanyName}
+                    setCustomCompanyName={setCustomCompanyName}
+                    isAdmin={currentOfflineUser?.role === 'admin'}
+                    onRefreshPool={() => fetchCustomInvoices(true)}
+                    isRefreshingPool={isRefreshingInvoices}
+                  />
+                ) : (
+                  /* Tab 4: Trainee Accounts Management Tab (Admin Only) */
+                  <div className="space-y-6 animate-fade-in" id="admin-user-management-tab">
+                    <div className="space-y-1">
+                      <h2 className="text-xl font-extrabold text-slate-800 flex items-center gap-2">
+                        👥 Trainee Operator Account Manager
+                      </h2>
+                      <p className="text-slate-500 text-xs">
+                        Create individual or batch accounts for classroom operators and view active credentials directory.
+                      </p>
+                    </div>
+
+                    <div className="flex border-b border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => { setOperatorInputMode('single'); setUserCreationError(null); setUserCreationSuccess(null); }}
+                        className={`pb-2.5 px-3 text-xs font-bold uppercase tracking-wider border-b-2 cursor-pointer transition ${
+                          operatorInputMode === 'single'
+                            ? 'border-indigo-600 text-indigo-600 font-extrabold'
+                            : 'border-transparent text-slate-400 hover:text-slate-600'
+                        }`}
+                      >
+                        Single Account Creation
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setOperatorInputMode('bulk'); setUserCreationError(null); setUserCreationSuccess(null); }}
+                        className={`pb-2.5 px-3 text-xs font-bold uppercase tracking-wider border-b-2 cursor-pointer transition flex items-center gap-1 ${
+                          operatorInputMode === 'bulk'
+                            ? 'border-indigo-600 text-indigo-600 font-extrabold'
+                            : 'border-transparent text-slate-400 hover:text-slate-600'
+                        }`}
+                      >
+                        <span>⚡ Batch Operator Provisioning</span>
+                      </button>
+                    </div>
+
+                    <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 shadow-inner">
+                      {operatorInputMode === 'single' ? (
+                        <form onSubmit={handleCreateTraineeUser} className="space-y-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 font-sans">
+                                Trainee Username <span className="text-rose-500">*</span>
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="e.g. trainee_01"
+                                value={newTraineeUsername}
+                                onChange={(e) => setNewTraineeUsername(e.target.value)}
+                                className="w-full p-2.5 bg-white border border-slate-200 text-xs text-slate-800 rounded-xl outline-none focus:border-indigo-500 font-sans"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 font-sans">
+                                Access Password <span className="text-rose-500">*</span>
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="e.g. pass123"
+                                value={newTraineePassword}
+                                onChange={(e) => setNewTraineePassword(e.target.value)}
+                                className="w-full p-2.5 bg-white border border-slate-200 text-xs text-slate-800 rounded-xl outline-none focus:border-indigo-500 font-sans"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex justify-end">
+                            <button
+                              type="submit"
+                              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold text-xs uppercase tracking-wider cursor-pointer shadow-sm transition"
+                            >
+                              + Create Trainee Profile
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        <form onSubmit={handleBatchCreateOperators} className="space-y-4">
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 font-sans">
+                              Batch Operator Usernames (One per line or CSV: username,password)
+                            </label>
+                            <textarea
+                              rows={4}
+                              placeholder="trainee_01&#10;trainee_02,pass456&#10;operator_a&#10;operator_b,secret789"
+                              value={bulkInputText}
+                              onChange={(e) => setBulkInputText(e.target.value)}
+                              className="w-full p-2.5 bg-white border border-slate-200 text-xs text-slate-800 rounded-xl outline-none focus:border-indigo-500 font-mono"
+                            />
+                          </div>
+                          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                            <div className="flex items-center gap-2">
+                              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider font-sans">Default Password:</label>
+                              <input
+                                type="text"
+                                value={bulkDefaultPass}
+                                onChange={(e) => setBulkDefaultPass(e.target.value)}
+                                className="p-1.5 bg-white border border-slate-200 text-xs rounded-lg font-mono font-bold"
+                              />
+                            </div>
+                            <button
+                              type="submit"
+                              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold text-xs uppercase tracking-wider cursor-pointer shadow-sm transition"
+                            >
+                              ⚡ Provision Accounts
+                            </button>
+                          </div>
+                        </form>
+                      )}
+
+                      {userCreationError && (
+                        <p className="text-[11px] text-rose-600 font-sans mt-3">{userCreationError}</p>
+                      )}
+                      {userCreationSuccess && (
+                        <p className="text-[11px] text-emerald-600 font-sans mt-3">{userCreationSuccess}</p>
+                      )}
+                    </div>
+
+                    {/* Active Operator Directory */}
+                    <div className="space-y-3">
+                      <span className="text-[10px] uppercase font-bold tracking-widest text-slate-400 block">
+                        Active Sandbox Profiles ({localUsers.length})
+                      </span>
+
+                      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                        <table className="w-full text-left text-xs border-collapse font-sans">
+                          <thead>
+                            <tr className="bg-slate-50 text-slate-500 font-mono text-[9px] uppercase tracking-wider border-b border-slate-200">
+                              <th className="p-3">Operator Username</th>
+                              <th className="p-3">Plaintext Access Key</th>
+                              <th className="p-3">Assigned Role</th>
+                              <th className="p-3">Created Date</th>
+                              <th className="p-3 text-right">Delete profile</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {localUsers.map((user) => (
+                              <tr key={user.username} className="hover:bg-slate-50/50 transition">
+                                <td className="p-3 font-bold text-slate-700">{user.username}</td>
+                                <td className="p-3 font-mono text-slate-500 font-bold">{user.passwordText}</td>
+                                <td className="p-3">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold font-sans uppercase border ${
+                                    user.role === 'admin'
+                                      ? 'bg-indigo-50 text-indigo-700 border-indigo-100'
+                                      : 'bg-slate-100 text-slate-600 border-slate-200'
+                                  }`}>
+                                    {user.role}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-slate-400 font-mono text-[10px]">{user.createdAt || '2026-05-22'}</td>
+                                <td className="p-3 text-right">
+                                  {user.role === 'admin' ? (
+                                    <span className="text-[9px] text-slate-400 italic">Core Admin</span>
+                                  ) : (
+                                    <div className="flex justify-end gap-2 items-center">
+                                      {userPendingDelete === user.username ? (
+                                        <>
+                                          <button
+                                            onClick={() => handleDeleteTraineeUser(user.username, true)}
+                                            className="text-[10px] bg-rose-600 hover:bg-rose-700 text-white font-extrabold uppercase px-2 py-1 rounded transition cursor-pointer font-sans"
+                                          >
+                                            Confirm Del?
+                                          </button>
+                                          <button
+                                            onClick={() => setUserPendingDelete(null)}
+                                            className="text-[10px] text-slate-400 hover:text-slate-600 font-semibold uppercase font-sans cursor-pointer"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <button
+                                          onClick={() => handleDeleteTraineeUser(user.username)}
+                                          className="text-[10px] text-rose-500 hover:text-rose-700 font-bold uppercase transition cursor-pointer font-sans"
+                                        >
+                                          Delete
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Workplace Context parameters / Trainee Card */}
+            <div id="workplace-context" className="bg-white border border-slate-200 rounded-2xl p-6 flex flex-col justify-between shadow-sm animate-fade-in">
+              <div className="space-y-4">
+                {/* Trainee Last Result Card */}
+                <div className="border-b border-slate-150 pb-5 mb-1">
+                  <div className="flex items-center space-x-2 text-indigo-650 font-bold text-xs uppercase tracking-widest">
+                    <Award className="w-4 h-4 text-indigo-600" />
+                    <span>Your Latest Speed Run</span>
+                  </div>
+                  {latestSessionByMe ? (
+                    <div className="mt-3 bg-gradient-to-br from-indigo-50/50 to-white border border-indigo-150 rounded-xl p-4 space-y-3.5 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">
+                            Average Pace
+                          </span>
+                          <span className="block text-2xl font-bold text-slate-800 mt-1 font-mono">
+                            {(latestSessionByMe.averageTimeMs / 1000).toFixed(2)}s
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">
+                            Rank Level
+                          </span>
+                          <span className={`inline-block text-[10px] px-2 py-0.5 rounded font-extrabold uppercase mt-1 ${
+                            latestSessionByMe.level === 'A' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
+                            latestSessionByMe.level === 'B' ? 'bg-indigo-100 text-indigo-800 border border-indigo-200' :
+                            latestSessionByMe.level === 'C' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
+                            'bg-rose-100 text-rose-800 border border-rose-200'
+                          }`}>
+                            Level {latestSessionByMe.level || 'D'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-indigo-100 font-sans">
+                        <div>
+                          <span className="text-slate-400">Accuracy:</span>{' '}
+                          <strong className="text-slate-700 font-mono font-bold">
+                            {latestSessionByMe.totalImagesAttempted > 0 
+                              ? Math.round((latestSessionByMe.correctEntries / latestSessionByMe.totalImagesAttempted) * 100) 
+                              : 100}%
+                          </strong>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-slate-400">Category:</span>{' '}
+                          <strong className="text-indigo-600 font-bold uppercase text-[10px]">
+                            {latestSessionByMe.category === 'date_number' ? 'Date' : latestSessionByMe.category === 'phone_number' ? 'Phone' : 'Tax No'}
+                          </strong>
+                        </div>
+                      </div>
+
+                      <div className="text-[9px] text-slate-400 font-mono text-center flex items-center justify-center gap-1 leading-none">
+                        <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                        <span>Achieved: {new Date(latestSessionByMe.timestamp).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-3 bg-slate-50 border border-dashed border-slate-200 rounded-xl p-4 text-center">
+                      <p className="text-xs text-slate-500 font-medium leading-normal">
+                        No assessment scoring found for <strong>{currentOfflineUser.username}</strong> on this workstation yet.
+                      </p>
+                      <p className="text-[10px] text-slate-400 mt-1.5 leading-relaxed">
+                        Execute an assessment benchmark above to record your performance.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Target Speed Standard Widget */}
+                <div className="space-y-3">
+                  <div className="bg-gradient-to-br from-indigo-50/70 to-slate-50 border border-indigo-150 rounded-xl p-3.5 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <Zap className="w-3.5 h-3.5 text-indigo-600 fill-indigo-600" />
+                        Target Speed Standard
+                      </span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 font-mono">
+                        Level A: {CATEGORY_SLA_CONFIG[activeTrainingCategory]?.levels.A.rangeShort || 'Under 3.0s'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-1 text-center font-mono">
+                      <div className="bg-white p-1.5 rounded border border-slate-200">
+                        <span className="text-[10px] font-bold text-emerald-700 block">Lvl A</span>
+                        <span className="text-[9px] text-slate-500">{CATEGORY_SLA_CONFIG[activeTrainingCategory]?.levels.A.rangeShort}</span>
+                      </div>
+                      <div className="bg-white p-1.5 rounded border border-slate-200">
+                        <span className="text-[10px] font-bold text-indigo-700 block">Lvl B</span>
+                        <span className="text-[9px] text-slate-500">{CATEGORY_SLA_CONFIG[activeTrainingCategory]?.levels.B.rangeShort}</span>
+                      </div>
+                      <div className="bg-white p-1.5 rounded border border-slate-200">
+                        <span className="text-[10px] font-bold text-amber-700 block">Lvl C</span>
+                        <span className="text-[9px] text-slate-500">{CATEGORY_SLA_CONFIG[activeTrainingCategory]?.levels.C.rangeShort}</span>
+                      </div>
+                      <div className="bg-white p-1.5 rounded border border-slate-200">
+                        <span className="text-[10px] font-bold text-rose-700 block">Lvl D</span>
+                        <span className="text-[9px] text-slate-500">{CATEGORY_SLA_CONFIG[activeTrainingCategory]?.levels.D.rangeShort}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Speed & Precision Tips */}
+                  <div className="space-y-2 text-xs">
+                    <div className="flex items-center gap-1.5 text-slate-700 font-bold">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                      <span>Speed & Precision Tips</span>
+                    </div>
+                    <ul className="space-y-1.5 text-[11px] text-slate-500 leading-normal">
+                      <li className="flex items-start gap-1.5">
+                        <span className="text-indigo-600 font-bold shrink-0">⌨️</span>
+                        <span>Anchor index finger on the <strong>Tenkey Numpad (4-5-6)</strong> home row for rapid blind entry.</span>
+                      </li>
+                      <li className="flex items-start gap-1.5">
+                        <span className="text-emerald-600 font-bold shrink-0">⚡</span>
+                        <span><strong>Zero Enter Key:</strong> Auto-advance submits automatically upon typing target length.</span>
+                      </li>
+                      <li className="flex items-start gap-1.5">
+                        <span className="text-pink-600 font-bold shrink-0">🎯</span>
+                        <span>Scan the receipt text before placing fingers to minimize visual recognition latency.</span>
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 bg-slate-50 p-3 rounded-xl border border-slate-150 text-slate-500 text-[11px] flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0" />
+                <span>Standard SLA requires <strong>≥ 95% accuracy</strong> and <strong>Level C or better</strong> to qualify.</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* B. ACTIVE WORKSTATION SESSION RUNNING */}
+        {isTestActive && expectedDataset[currentIndex] && (
+          <div className="space-y-6 animate-fade-in" id="active-test-container">
+            {/* Real-time stats header banner */}
+            <StatsPanel
+              currentIndex={currentIndex}
+              totalCount={expectedDataset.length}
+              correctCount={correctCount}
+              elapsedMs={elapsedMs}
+              averageTimeMs={
+                sessionResults.length > 0 
+                  ? Math.round(sessionResults.reduce((sum, r) => sum + r.timeSpentMs, 0) / sessionResults.length) 
+                  : 0
+              }
+              isTestActive={true}
+              trainingMode={trainingMode}
+              category={activeTrainingCategory}
+            />
+
+            {/* Split Screen Layout */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+              {/* Left Column: Image Scan Workstation */}
+              <div className="lg:col-span-7">
+                <InvoiceViewer
+                  currentInvoice={expectedDataset[currentIndex]}
+                  onImageLoaded={handleInvoiceImageOnLoad}
+                  isLoading={false}
+                />
+              </div>
+
+              {/* Right Column: Key Entry Node */}
+              <div className="lg:col-span-5 flex flex-col justify-between bg-white border border-slate-200 rounded-2xl p-6 shadow-sm relative overflow-hidden">
+                <div className="space-y-6">
+                  {/* Title card */}
+                  <div className="flex justify-between items-start gap-4">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                          Data Entry Port
+                        </h3>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100 uppercase">
+                          {activeTrainingCategory === 'date_number' ? 'Date Entry' : activeTrainingCategory === 'phone_number' ? 'Phone Entry' : 'Tax Code Entry'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-1 uppercase font-mono tracking-wider">
+                        Target ID: {expectedDataset[currentIndex].id.toUpperCase()} Scan 
+                      </p>
+                    </div>
+                    {!isConfirmingCancel ? (
+                      <button
+                        onClick={() => setIsConfirmingCancel(true)}
+                        aria-label="Abort testing session"
+                        className="px-3 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200 hover:border-rose-300 rounded-lg text-xs font-bold tracking-wider uppercase cursor-pointer transition"
+                        id="abort-session-btn"
+                      >
+                        Cancel
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Abort test?</span>
+                        <button
+                          onClick={handleCancelTestingSession}
+                          aria-label="Confirm aborting current typing session"
+                          className="px-2.5 py-1 bg-red-600 text-white hover:bg-red-700 rounded text-xs font-bold tracking-wider uppercase cursor-pointer transition shrink-0"
+                          id="confirm-abort-btn"
+                        >
+                          Yes, Abort
+                        </button>
+                        <button
+                          onClick={() => setIsConfirmingCancel(false)}
+                          aria-label="Dismiss and continue typing session"
+                          className="px-2 py-1 bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200 rounded text-xs font-bold tracking-wider uppercase cursor-pointer transition shrink-0"
+                          id="cancel-abort-btn"
+                        >
+                          No
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Visual stream progress line */}
+                  <div className="-mt-2">
+                    <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                      <div 
+                        className="bg-indigo-650 h-1.5 transition-all duration-300"
+                        style={{ width: `${((currentIndex + 1) / expectedDataset.length) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Typing form input container */}
+                  <div className="space-y-3.5 relative">
+                    <label htmlFor="numeric-speed-input" className="block text-xs font-bold text-slate-700 uppercase tracking-widest">
+                      {activeTrainingCategory === 'date_number' 
+                        ? '8-Digit Date (YYYYMMDD)' 
+                        : activeTrainingCategory === 'phone_number' 
+                        ? 'Phone Digits (Numbers only)' 
+                        : 'Character Sequence Input (T+13)'}
+                    </label>
+
+                    {/* Alphanumeric / Numeric Text Field */}
+                    <div className="relative">
+                      <input
+                        id="numeric-speed-input"
+                        ref={inputRef}
+                        type="text"
+                        value={typedValue}
+                        onChange={handleInputChange}
+                        onPaste={handlePastePrevent}
+                        onCopy={handleCopyPrevent}
+                        autoComplete="off"
+                        autoCapitalize="characters"
+                        spellCheck={false}
+                        placeholder={
+                          activeTrainingCategory === 'date_number' ? '2026...' :
+                          activeTrainingCategory === 'phone_number' ? '03... / 090...' :
+                          (expectedDataset[currentIndex].expectedNumber.startsWith('T') ? 'T...' : '13...')
+                        }
+                        className={`w-full py-4 px-5 text-center text-3xl font-bold tracking-[0.2em] font-mono text-slate-800 placeholder:text-slate-300 bg-slate-50 border focus:ring-4 outline-none rounded-xl transition ${
+                          lastCharacterValid === true ? 'border-emerald-500 focus:ring-emerald-50 bg-emerald-50/10 text-emerald-800' : 
+                          lastCharacterValid === false ? 'border-rose-500 focus:ring-rose-50 bg-rose-50/10 text-rose-800' : 'border-slate-250 focus:ring-indigo-100'
+                        }`}
+                      />
+
+                      {/* Character limit feedback ticks */}
+                      <div className="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 flex items-center justify-center">
+                        <span className="text-[11px] font-bold font-mono text-slate-400 bg-white border border-slate-205 px-1.5 py-0.5 rounded tracking-wide">
+                          {typedValue.length} / {
+                            activeTrainingCategory === 'date_number' ? 8 :
+                            activeTrainingCategory === 'phone_number' ? (expectedDataset[currentIndex].expectedNumber.replace(/\D/g, '').length || 10) :
+                            (expectedDataset[currentIndex].expectedNumber.startsWith('T') && typedValue.startsWith('T') ? 14 : 13)
+                          }
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Visual tick ribbon */}
+                    <div className="flex justify-center space-x-1 h-1.5">
+                      {Array.from({ 
+                        length: activeTrainingCategory === 'date_number' ? 8 :
+                          activeTrainingCategory === 'phone_number' ? (expectedDataset[currentIndex].expectedNumber.replace(/\D/g, '').length || 10) :
+                          (expectedDataset[currentIndex].expectedNumber.startsWith('T') && typedValue.startsWith('T') ? 14 : 13)
+                      }).map((_, idx) => {
+                        let dotColor = 'bg-slate-100 border border-slate-200';
+                        if (idx < typedValue.length) {
+                          if (lastCharacterValid === false && idx === typedValue.length - 1) {
+                            dotColor = 'bg-rose-500';
+                          } else {
+                            dotColor = 'bg-indigo-600';
+                          }
+                        }
+                        return (
+                          <div 
+                            key={idx} 
+                            className={`w-3.5 h-1.5 rounded-full transition-colors ${dotColor}`} 
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Entry help parameters card */}
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-150 space-y-2">
+                    <span className="text-[10px] uppercase font-bold tracking-widest text-slate-500 block font-semibold">
+                      Workstation Specifications:
+                    </span>
+                    <ul className="text-xs text-slate-550 space-y-1.5 leading-relaxed list-disc list-inside">
+                      {activeTrainingCategory === 'date_number' ? (
+                        <>
+                          <li>Enter 8 numeric digits formatted as <strong className="text-slate-800">YYYYMMDD</strong> (e.g. 20260522).</li>
+                          <li>Auto-advances instantly upon reaching 8 digits.</li>
+                        </>
+                      ) : activeTrainingCategory === 'phone_number' ? (
+                        <>
+                          <li>Enter numeric digits only (e.g. 0312345678 or 09012345678).</li>
+                          <li>Auto-advances immediately upon matching expected telephone length.</li>
+                        </>
+                      ) : (
+                        <>
+                          <li>Type registration code: Capital <strong className="text-slate-800">T</strong> followed by 13 digits.</li>
+                          <li>If you skip typing &quot;T&quot;, enter just the 13 digits and it auto-advances.</li>
+                        </>
+                      )}
+                      <li>Paste is disabled for verification integrity.</li>
+                      <li>Click outside? Use <button onClick={() => inputRef.current?.focus()} className="text-indigo-600 hover:text-indigo-500 underline cursor-pointer font-bold">Refocus Field</button>.</li>
+                    </ul>
+                  </div>
+                </div>
+
+                {/* Left Time threshold bar */}
+                <div className="mt-8 border-t border-slate-150 pt-4 flex justify-between items-center text-slate-500 text-[11px] font-mono">
+                  <span>Image ID: {expectedDataset[currentIndex].id.toUpperCase()}</span>
+                  <span className={elapsedMs > categorySlaTarget ? 'text-rose-600 font-bold' : ''}>
+                    Pace: {(elapsedMs / 1000).toFixed(1)}s / {categorySlaLimitSec}s
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* C. WORKSHEET TEST COMPLETE - RESULTS */}
+        {testComplete && (
+          <div className="space-y-6 animate-fade-in" id="results-display-screen">
+            {/* Real-time stats header banner */}
+            <StatsPanel
+              currentIndex={expectedDataset.length}
+              totalCount={expectedDataset.length}
+              correctCount={correctCount}
+              elapsedMs={0}
+              averageTimeMs={averageTimeMs}
+              isTestActive={false}
+              trainingMode={trainingMode}
+              category={activeTrainingCategory}
+            />
+
+            {/* Main results summary block */}
+            <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-10 shadow-sm relative overflow-hidden animate-fade-in">
+              <div className="absolute top-0 right-0 p-10 select-none pointer-events-none opacity-[0.02] text-indigo-600">
+                <Trophy className="w-96 h-96" />
+              </div>
+
+              <div className="relative z-10 flex flex-col md:flex-row gap-8 items-center justify-between">
+                <div className="space-y-4 text-center md:text-left">
+                  <div className="flex items-center justify-center md:justify-start gap-3">
+                    <div className="p-3 bg-amber-50 text-amber-600 rounded-2xl border border-amber-200">
+                      <Trophy className="w-10 h-10 animate-bounce" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 justify-center md:justify-start flex-wrap">
+                        <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-800 tracking-tight">
+                          Assessment Finalized
+                        </h2>
+                        <span className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                          {activeTrainingCategory === 'date_number' ? '📅 Date' : activeTrainingCategory === 'phone_number' ? '📞 Phone' : '🧾 Tax No'}
+                        </span>
+                        {trainingMode === 'hard_180' || expectedDataset.length > 90 ? (
+                          <span className="inline-flex items-center gap-1.5 bg-purple-100 text-purple-800 border border-purple-300 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                            <span className="w-2 h-2 rounded-full bg-purple-600"></span>
+                            ⚡ Hard Mode (180 Invoices)
+                          </span>
+                        ) : trainingMode === 'normal_90' || expectedDataset.length > 20 ? (
+                          <span className="inline-flex items-center gap-1.5 bg-blue-50 text-blue-700 border border-blue-200 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                            <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+                            Normal Mode (90 Invoices)
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                            <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
+                            Easy Mode (20 Invoices)
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm text-slate-500 mt-1">
+                        Workspace review and analytics scores successfully registered.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Rank Display Badge */}
+                  <div className="flex items-center gap-2 justify-center md:justify-start">
+                    <span className="text-xs uppercase text-slate-400 font-bold tracking-widest font-mono">Evaluation Rating:</span>
+                    <span className={`text-[10px] px-3 py-1 rounded-full font-bold uppercase tracking-wider border ${currentRank.color}`}>
+                      {currentRank.name}
+                    </span>
+                  </div>
+                  
+                  {saveError && (
+                    <div className="p-2 border border-rose-200 bg-rose-50 text-rose-700 rounded text-xs flex items-center gap-2">
+                      <ShieldAlert className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      <span>{saveError}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+                  <button
+                    onClick={handleDownloadPDF}
+                    className="px-5 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 shadow-md cursor-pointer text-sm uppercase tracking-wider shrink-0"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download PDF Result</span>
+                  </button>
+                  <button
+                    onClick={handleDownloadHTML}
+                    className="px-5 py-3.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 shadow-md cursor-pointer text-sm uppercase tracking-wider shrink-0"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download HTML Result</span>
+                  </button>
+                  <button
+                    onClick={handleRunAgain}
+                    className="px-5 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 shadow-sm cursor-pointer text-sm uppercase tracking-wider"
+                    id="btn-run-again"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    <span>Run Again</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setTestComplete(false);
+                      setIsTestActive(false);
+                    }}
+                    className="px-5 py-3.5 bg-white hover:bg-slate-50 text-slate-700 rounded-xl font-bold transition flex items-center justify-center border border-slate-200 gap-1.5 cursor-pointer text-sm font-sans"
+                  >
+                    <span>Return to Configuration</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Item details table logs list card */}
+              <div className="mt-10 border-t border-slate-150 pt-8" id="itemized-analysis-card">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-widest flex items-center gap-2">
+                    <BarChart2 className="w-4 h-4 text-indigo-650" /> Complete Worksheet Analysis ({expectedDataset.length} Invoices)
+                  </h3>
+                  <span className="text-xs font-mono text-slate-400">SORTED BY CHRONOLOGY</span>
+                </div>
+
+                {/* Items grid */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse font-mono">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-400 font-bold uppercase tracking-wider pb-3 text-[10px]">
+                        <th className="pb-3 text-left">No.</th>
+                        <th className="pb-3">Image ID</th>
+                        <th className="pb-3">
+                          Expected ({activeTrainingCategory === 'date_number' ? 'Date YYYYMMDD' : activeTrainingCategory === 'phone_number' ? 'Phone Digits' : 'Tax Code'})
+                        </th>
+                        <th className="pb-3 text-slate-600">Your Typing Entry</th>
+                        <th className="pb-3">Lapse Speed</th>
+                        <th className="pb-3 text-right">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-150">
+                      {sessionResults.map((result, idx) => {
+                        const meetsSLA = result.timeSpentMs <= categorySlaTarget;
+                        return (
+                          <tr key={idx} className="hover:bg-slate-50 transition text-slate-700">
+                            <td className="py-3 font-semibold text-slate-400">{String(idx + 1).padStart(2, '0')}</td>
+                            <td className="py-3 text-slate-500">{result.imageId.toUpperCase()}</td>
+                            <td className="py-3 font-bold text-slate-900">{result.expectedNumber}</td>
+                            <td className="py-3 text-slate-700">{result.typedNumber || <span className="italic text-slate-400 font-normal leading-none">[skipped]</span>}</td>
+                            <td className={`py-3 font-semibold ${meetsSLA ? 'text-indigo-600' : 'text-amber-600'}`}>
+                              {(result.timeSpentMs / 1000).toFixed(2)}s {meetsSLA ? '(Meets SLA)' : `(Over ${categorySlaLimitSec}s)`}
+                            </td>
+                            <td className="py-3 text-right">
+                              {result.isCorrect ? (
+                                <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded text-[10px] uppercase font-bold border border-emerald-200">
+                                  <Check className="w-3.5 h-3.5 text-emerald-700" /> Match
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 bg-rose-100 text-rose-800 px-2.5 py-1 rounded text-[10px] uppercase font-bold border border-rose-200">
+                                  <X className="w-3.5 h-3.5 text-rose-700" /> Mismatch
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 3. Bottom Section: Historical logs */}
+        <HistoryLogs 
+          userId={currentOfflineUser ? currentOfflineUser.username : 'guest'} 
+          refreshTrigger={refreshTrigger}
+          isAdmin={currentOfflineUser?.role === 'admin'}
+        />
+
+      </main>
+
+      {/* Footer System Indicator */}
+      <footer className="bg-slate-900 border-t border-slate-950 py-6 text-center text-slate-400 text-xs mt-auto select-none font-sans">
+        <p className="font-semibold text-white">Japanese Invoice Speed Assessment Node | Multi-Category Training Hub</p>
+        <p className="mt-1 text-slate-400 text-[11px]">Tax Number • Transaction Date • Contact Phone Number. High precision performance.now() chronometer active.</p>
+      </footer>
+
+      {/* Interactive Batch Labeling Assistant Lightbox modal */}
+      {labelingModalIndex !== null && customInvoices[labelingModalIndex] && (() => {
+        const inv = customInvoices[labelingModalIndex];
+        const modalCategory = inv.category || 'tax_number';
+        
+        const handleNextLabel = () => {
+          if (labelingModalIndex < customInvoices.length - 1) {
+            setLabelingModalIndex(labelingModalIndex + 1);
+          } else {
+            setLabelingModalIndex(null);
+          }
+        };
+
+        const handlePrevLabel = () => {
+          if (labelingModalIndex > 0) {
+            setLabelingModalIndex(labelingModalIndex - 1);
+          }
+        };
+
+        return (
+          <div className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in" id="labeling-assistant-modal">
+            <div className="bg-white rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl border border-slate-100 flex flex-col md:flex-row max-h-[90vh]">
+              
+              {/* Left Side: Invoice Preview Card */}
+              <div className="bg-slate-950 p-6 flex flex-col justify-between items-center md:w-[45%] border-r border-slate-800 min-h-[300px] relative">
+                <div className="absolute top-3 left-3 flex items-center gap-1 bg-slate-800 text-slate-300 font-mono text-[9px] uppercase px-1.5 py-0.5 rounded tracking-wide">
+                  <span>Doc {labelingModalIndex + 1} of {customInvoices.length}</span>
+                </div>
+                
+                <button 
+                  onClick={() => setLabelingModalIndex(null)}
+                  aria-label="Close Preview"
+                  className="absolute top-3 right-3 text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-800 transition cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+
+                <div className="flex-1 w-full flex items-center justify-center p-2 mb-4 mt-6 overflow-hidden max-h-[380px]">
+                  <img 
+                    src={inv.customImageUrl} 
+                    alt="Receipt Preview" 
+                    className="max-h-full max-w-full rounded shadow-md object-contain border border-slate-850"
+                  />
+                </div>
+
+                <div className="w-full text-center">
+                  <p className="text-[10px] text-slate-400 font-mono tracking-widest uppercase">
+                    Interactive Image Zoom
+                  </p>
+                </div>
+              </div>
+
+              {/* Right Side: Data Labeler Fields */}
+              <div className="p-6 md:w-[55%] flex flex-col justify-between bg-white overflow-y-auto">
+                <div className="space-y-5">
+                  <div>
+                    <span className="text-[9px] font-bold text-indigo-600 uppercase tracking-widest block mb-1">
+                      🏷️ Batch Reviewer
+                    </span>
+                    <h3 className="text-lg font-bold text-slate-800 font-sans tracking-tight leading-none">
+                      Verify & Set Codes
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                      {modalCategory === 'date_number' 
+                        ? 'Review receipt image and verify the 8-digit transaction date (YYYYMMDD).'
+                        : modalCategory === 'phone_number'
+                        ? 'Review receipt image and verify the contact telephone digits.'
+                        : 'Review receipt image and verify the 13-digit Qualified Tax registration number starting with "T".'}
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
+                        Expected Transcribed Value <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="relative flex items-center">
+                        <input
+                          type="text"
+                          placeholder={modalCategory === 'date_number' ? '20260522' : modalCategory === 'phone_number' ? '0312345678' : 'T1234567890123'}
+                          value={inv.expectedNumber}
+                          autoFocus
+                          onChange={(e) => updateCustomInvoiceCode(inv.id, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              handleNextLabel();
+                            }
+                          }}
+                          className="w-full p-2.5 bg-slate-50 border border-slate-205 text-sm text-slate-800 font-mono font-bold rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-100 tracking-wide text-indigo-700"
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-1 leading-normal font-sans">
+                        Press <strong className="text-slate-700 font-bold">Enter</strong> to save and go to next image automatically.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
+                        Invoice Issuer / Business Name
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Aeon Co., Ltd."
+                        maxLength={36}
+                        value={inv.companyName}
+                        onChange={(e) => updateCustomInvoiceCompany(inv.id, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleNextLabel();
+                          }
+                        }}
+                        className="w-full p-2.5 bg-slate-50 border border-slate-205 text-xs text-slate-800 rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-100"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-6 border-t border-slate-100 mt-6 flex justify-between items-center gap-3">
+                  <button
+                    onClick={handlePrevLabel}
+                    disabled={labelingModalIndex === 0}
+                    className={`px-3 py-1.5 rounded-lg border text-[11px] font-bold font-sans flex items-center justify-center transition uppercase tracking-wider ${
+                      labelingModalIndex === 0
+                        ? 'border-slate-100 text-slate-300 bg-slate-50 cursor-not-allowed'
+                        : 'border-slate-200 text-slate-600 bg-white hover:bg-slate-50 cursor-pointer'
+                    }`}
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5 mr-0.5" /> Prev
+                  </button>
+
+                  <span className="text-[9px] text-slate-400 font-mono tracking-wider uppercase font-semibold">
+                    Doc {labelingModalIndex + 1} of {customInvoices.length}
+                  </span>
+
+                  <button
+                    onClick={handleNextLabel}
+                    className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold font-sans rounded-lg transition flex items-center justify-center uppercase tracking-wider cursor-pointer shadow-sm"
+                  >
+                    {labelingModalIndex === customInvoices.length - 1 ? 'Close Reviewer' : 'Next'} <ChevronRight className="w-3.5 h-3.5 ml-0.5" />
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}

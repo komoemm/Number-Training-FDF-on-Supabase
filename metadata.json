@@ -1,0 +1,8 @@
+{
+  "name": "Remix Data Entry Typing Speed Test of Supabase",
+  "description": "A speed and accuracy testing interface for data entry personnel typing Japanese Qualified Invoice numbers from realistic receipt images.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
