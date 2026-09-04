@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useMemo } from 'react';
 import {
   FileImage,
   FileText,
@@ -20,7 +20,9 @@ import {
   CheckCircle2,
   AlertCircle,
   RefreshCw,
-  X
+  X,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { GeneratedInvoiceData, TrainingCategory, TrainingMode } from '../types';
 
@@ -73,6 +75,23 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [showRules, setShowRules] = useState<boolean>(false);
   const [showPoolCatalog, setShowPoolCatalog] = useState<boolean>(false);
+  const [reviewerModalIndex, setReviewerModalIndex] = useState<number | null>(null);
+  const [matchedCsvMap, setMatchedCsvMap] = useState<Record<string, string>>({});
+
+  // Helper to extract clean image title/identifier consistently
+  const getItemTitle = (item: GeneratedInvoiceData & { customImageUrl?: string; title?: string }): string => {
+    return (item.title || (item as any).title || item.companyName || item.id || '').trim();
+  };
+
+  // 1. Natural Sorting for Active Pool Images:
+  // Whenever images are loaded or set into state, sort them using natural alphanumeric sort so that image '2' comes before '10'
+  const sortedInvoices = useMemo(() => {
+    return [...invoices].sort((a, b) => {
+      const titleA = getItemTitle(a);
+      const titleB = getItemTitle(b);
+      return titleA.localeCompare(titleB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  }, [invoices]);
 
   // CSV Labeling Management Toast & Feedback State
   interface CsvFeedback {
@@ -113,9 +132,9 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
     const headers = ['Image_Identifier', 'Expected_Value', 'Category', 'Issuer_Or_Note'];
     const rows: string[] = [headers.join(',')];
 
-    if (invoices.length > 0) {
-      invoices.forEach((inv) => {
-        const rawTitle = (inv as any).title || inv.companyName || inv.id || '';
+    if (sortedInvoices.length > 0) {
+      sortedInvoices.forEach((inv) => {
+        const rawTitle = (inv as any).matchedIdentifier || getItemTitle(inv);
         const cleanTitle = rawTitle.replace(/\.(jpe?g|png|webp|gif|bmp|svg)$/i, '').trim();
         const expectedVal = inv.expectedNumber || '';
         const cat = inv.category || category;
@@ -252,12 +271,16 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         dataRows = parsedRows.slice(1);
       }
 
+      // 2. Robust Normalized Matching Helper:
+      // Strip file extensions, trim spaces, strip leading zeros, convert to lowercase
       const normalizeKey = (val: string): string => {
-        return (val || '')
+        if (!val) return '';
+        const cleaned = String(val)
+          .replace(/\.(jpg|jpeg|png|webp|gif|bmp)$/i, '')
           .trim()
-          .replace(/\.(jpe?g|png|webp|gif|bmp|svg)$/i, '')
-          .toLowerCase()
-          .replace(/[\s_\-]+/g, '');
+          .toLowerCase();
+        const noLeadingZeros = cleaned.replace(/^0+/, '');
+        return noLeadingZeros || cleaned;
       };
 
       const sanitizeValue = (raw: string, cat: string): string => {
@@ -306,6 +329,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
       let updatedCount = 0;
       const unmatchedIdentifiers: string[] = [];
+      const newMatchedMap: Record<string, string> = { ...matchedCsvMap };
 
       dataRows.forEach((row) => {
         const rawIdentifier = (row[idCol] || '').trim();
@@ -314,13 +338,13 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
         if (!rawIdentifier) return;
 
-        const cleanKey = normalizeKey(rawIdentifier);
+        const normalizedRowKey = normalizeKey(rawIdentifier);
 
-        // Match with Active Pool items by comparing Image_Identifier against item.title
-        // (ignoring case, extensions, and surrounding spaces)
-        const matchedItem = invoices.find((inv) => {
-          const title = (inv as any).title || inv.companyName || '';
-          return normalizeKey(title) === cleanKey || normalizeKey(inv.id) === cleanKey;
+        // Match CSV row to pool item strictly by comparing normalizeKey(row.Image_Identifier) === normalizeKey(item.title)
+        // DO NOT map by row index or array position. Match solely by key.
+        const matchedItem = sortedInvoices.find((inv) => {
+          const itemTitle = (inv as any).title || inv.companyName || inv.id || '';
+          return normalizeKey(itemTitle) === normalizedRowKey;
         });
 
         if (matchedItem) {
@@ -329,32 +353,36 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
           if (rawNote && onUpdateCompany) {
             onUpdateCompany(matchedItem.id, rawNote);
           }
+          newMatchedMap[matchedItem.id] = rawIdentifier;
+          (matchedItem as any).matchedFromCsv = true;
+          (matchedItem as any).matchedIdentifier = rawIdentifier;
           updatedCount++;
         } else {
           unmatchedIdentifiers.push(rawIdentifier);
         }
       });
 
+      setMatchedCsvMap(newMatchedMap);
+
       // 4. State Updates & Feedback
       if (unmatchedIdentifiers.length > 0) {
         console.warn('[CSV Import] Active Pool တွင် မတွေ့ရှိသော ပုံအမည်များ (Unmatched Image Identifiers):', unmatchedIdentifiers);
       }
 
-      if (updatedCount > 0 && unmatchedIdentifiers.length === 0) {
+      const totalImages = sortedInvoices.length;
+
+      // Burmese Toast Notification:
+      // "အောင်မြင်စွာ ချိတ်ဆက်ပြီးပါပြီ။ စုစုပေါင်း [Matched]/[Total] ပုံအတွက် သတ်မှတ်တန်ဖိုးများကို တိကျစွာ သတ်မှတ်ပြီးပါပြီ။"
+      if (updatedCount > 0) {
         setCsvToast({
           type: 'success',
-          message: `CSV မှ ပုံ ${updatedCount}/${invoices.length} ပုံအတွက် သတ်မှတ်တန်ဖိုးများကို အောင်မြင်စွာ Update လုပ်ပြီးပါပြီ။`
-        });
-      } else if (updatedCount > 0 && unmatchedIdentifiers.length > 0) {
-        setCsvToast({
-          type: 'warning',
-          message: `CSV မှ ပုံ ${updatedCount}/${invoices.length} ပုံအတွက် သတ်မှတ်တန်ဖိုးများကို Update လုပ်ပြီးပါပြီ။`,
-          unmatched: unmatchedIdentifiers
+          message: `အောင်မြင်စွာ ချိတ်ဆက်ပြီးပါပြီ။ စုစုပေါင်း ${updatedCount}/${totalImages} ပုံအတွက် သတ်မှတ်တန်ဖိုးများကို တိကျစွာ သတ်မှတ်ပြီးပါပြီ။`,
+          unmatched: unmatchedIdentifiers.length > 0 ? unmatchedIdentifiers : undefined
         });
       } else {
         setCsvToast({
           type: 'error',
-          message: `CSV မှ ပုံအမည်များကို Active Pool တွင် ရှာမတွေ့ပါ။ (${unmatchedIdentifiers.length} ခု မတွေ့ရှိပါ)`,
+          message: `CSV ဖိုင်မှ ပုံအမည်များနှင့် Active Pool ရှိ ပုံများ ကိုက်ညီမှု မရှိပါ။ (${unmatchedIdentifiers.length} ခု မတွေ့ရှိပါ)`,
           unmatched: unmatchedIdentifiers
         });
       }
@@ -704,7 +732,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               </div>
             )}
 
-            {invoices.length === 0 ? (
+            {sortedInvoices.length === 0 ? (
               <div className="border border-slate-200 rounded-xl p-6 text-center bg-white">
                 <p className="text-slate-400 text-xs font-semibold">No images in this category pool yet</p>
                 <p className="text-[10px] text-slate-400 mt-1.5 max-w-sm mx-auto leading-relaxed">
@@ -713,16 +741,17 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[220px] overflow-y-auto pr-1">
-                {invoices.map((inv) => {
-                  const globalIndex = allInvoices.findIndex(item => item.id === inv.id);
+                {sortedInvoices.map((inv, idx) => {
+                  const isMatchedFromCsv = !!(matchedCsvMap[inv.id] || (inv as any).matchedFromCsv);
+                  const displayTitle = matchedCsvMap[inv.id] || (inv as any).matchedIdentifier || getItemTitle(inv);
                   return (
                     <div key={inv.id} className="flex bg-white border border-slate-200 rounded-lg p-2 items-center justify-between group hover:border-indigo-300 transition relative">
                       <div className="flex items-center gap-2.5 overflow-hidden flex-1 mr-1">
                         {/* Thumbnail with Zoom */}
                         <div 
-                          onClick={() => globalIndex !== -1 && onOpenLabelingModal(globalIndex)}
+                          onClick={() => setReviewerModalIndex(idx)}
                           className="w-12 h-10 border border-slate-200 rounded bg-slate-50 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer relative group-hover:border-indigo-300 shadow-sm"
-                          title="Click to zoom & review details"
+                          title="Click to zoom & review in modal"
                         >
                           <img
                             src={inv.customImageUrl}
@@ -738,14 +767,21 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                         
                         {/* Inline Editable Fields */}
                         <div className="flex-1 min-w-0 space-y-1">
-                          <input
-                            type="text"
-                            value={inv.companyName}
-                            placeholder="Issuer Name"
-                            onChange={(e) => onUpdateCompany(inv.id, e.target.value)}
-                            className="w-full text-[10px] font-bold text-slate-700 bg-transparent hover:bg-slate-50 focus:bg-white border-b border-transparent hover:border-slate-300 focus:border-indigo-500 rounded px-1 py-0.5 outline-none transition"
-                            title="Click to edit issuer name"
-                          />
+                          <div className="flex items-center justify-between gap-1">
+                            <input
+                              type="text"
+                              value={inv.companyName}
+                              placeholder="Issuer Name"
+                              onChange={(e) => onUpdateCompany(inv.id, e.target.value)}
+                              className="w-full text-[10px] font-bold text-slate-700 bg-transparent hover:bg-slate-50 focus:bg-white border-b border-transparent hover:border-slate-300 focus:border-indigo-500 rounded px-1 py-0.5 outline-none transition"
+                              title="Click to edit issuer name"
+                            />
+                            {isMatchedFromCsv && (
+                              <span className="text-[9px] text-emerald-700 bg-emerald-50 border border-emerald-200 font-bold px-1.5 py-0.2 rounded shrink-0">
+                                CSV
+                              </span>
+                            )}
+                          </div>
                           <div className="flex items-center gap-1 pl-1">
                             <span className="text-[9px] text-indigo-600 font-mono font-bold shrink-0">Target:</span>
                             <input
@@ -762,10 +798,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                       {/* Action Buttons */}
                       <div className="flex flex-col items-center gap-1 shrink-0">
                         <button
-                          onClick={() => globalIndex !== -1 && onOpenLabelingModal(globalIndex)}
-                          aria-label={`Open labeling assistant for invoice ${inv.companyName || inv.id}`}
+                          onClick={() => setReviewerModalIndex(idx)}
+                          aria-label={`Open labeling assistant for invoice ${displayTitle}`}
                           className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded cursor-pointer transition"
-                          title="Open Labeling Assistant"
+                          title="Open Reviewer Modal"
                         >
                           <Edit className="w-3.5 h-3.5" />
                         </button>
@@ -838,7 +874,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 </div>
               </div>
 
-              {invoices.length === 0 ? (
+              {sortedInvoices.length === 0 ? (
                 <div className="border border-slate-200 rounded-xl p-4 text-center bg-white">
                   <p className="text-slate-400 text-xs font-semibold">No images prepared in this category yet</p>
                   <p className="text-[11px] text-slate-400 mt-1 max-w-sm mx-auto">
@@ -847,14 +883,15 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[140px] overflow-y-auto pr-1">
-                  {invoices.map((inv) => {
-                    const globalIndex = allInvoices.findIndex(item => item.id === inv.id);
+                  {sortedInvoices.map((inv, idx) => {
+                    const isMatchedFromCsv = !!(matchedCsvMap[inv.id] || (inv as any).matchedFromCsv);
+                    const displayTitle = matchedCsvMap[inv.id] || (inv as any).matchedIdentifier || getItemTitle(inv);
                     return (
                       <div key={inv.id} className="flex bg-white border border-slate-200 rounded-lg p-1.5 items-center justify-between group hover:border-indigo-300 transition shadow-2xs">
                         <div className="flex items-center gap-2 overflow-hidden flex-1 mr-1">
                           {/* Thumbnail with Zoom preview */}
                           <div 
-                            onClick={() => globalIndex !== -1 && onOpenLabelingModal(globalIndex)}
+                            onClick={() => setReviewerModalIndex(idx)}
                             className="w-10 h-8 border border-slate-200 rounded bg-slate-50 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer relative group-hover:border-indigo-300 shadow-sm"
                             title="Click to preview receipt image"
                           >
@@ -872,9 +909,16 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                           
                           {/* Read-Only Detail Display */}
                           <div className="flex-1 min-w-0 space-y-0.5">
-                            <p className="text-[10px] font-bold text-slate-800 truncate" title={inv.companyName || 'Unknown Issuer'}>
-                              {inv.companyName || 'Standard Receipt'}
-                            </p>
+                            <div className="flex items-center gap-1">
+                              <p className="text-[10px] font-bold text-slate-800 truncate" title={displayTitle}>
+                                {inv.companyName || displayTitle || 'Standard Receipt'}
+                              </p>
+                              {isMatchedFromCsv && (
+                                <span className="text-[8px] text-emerald-700 bg-emerald-50 border border-emerald-200 font-bold px-1 rounded shrink-0">
+                                  CSV
+                                </span>
+                              )}
+                            </div>
                             <div className="flex items-center gap-1 text-[9px] font-mono">
                               <span className="text-slate-400 font-bold">Target:</span>
                               <span className="font-bold text-indigo-700 uppercase tracking-wider bg-indigo-50/70 px-1 py-0.2 rounded border border-indigo-100 truncate">
@@ -886,7 +930,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
                         {/* Preview inspection button */}
                         <button
-                          onClick={() => globalIndex !== -1 && onOpenLabelingModal(globalIndex)}
+                          onClick={() => setReviewerModalIndex(idx)}
                           className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded cursor-pointer transition shrink-0"
                           title="Preview Full Image"
                           aria-label="Preview full invoice image"
@@ -1073,6 +1117,190 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
           </div>
         </div>
       </div>
+
+      {/* 3. Visual Confirmation in Reviewer Modal */}
+      {reviewerModalIndex !== null && sortedInvoices[reviewerModalIndex] && (() => {
+        const currentInv = sortedInvoices[reviewerModalIndex];
+        const isMatchedFromCsv = !!(matchedCsvMap[currentInv.id] || (currentInv as any).matchedFromCsv);
+        const displayIdentifier = matchedCsvMap[currentInv.id] || (currentInv as any).matchedIdentifier || getItemTitle(currentInv);
+
+        const handleNextReview = () => {
+          if (reviewerModalIndex < sortedInvoices.length - 1) {
+            setReviewerModalIndex(reviewerModalIndex + 1);
+          } else {
+            setReviewerModalIndex(null);
+          }
+        };
+
+        const handlePrevReview = () => {
+          if (reviewerModalIndex > 0) {
+            setReviewerModalIndex(reviewerModalIndex - 1);
+          }
+        };
+
+        return (
+          <div 
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 animate-fade-in"
+            id="category-reviewer-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reviewer-modal-title"
+          >
+            <div className="bg-white rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl border border-slate-200 flex flex-col md:flex-row max-h-[92vh]">
+              
+              {/* Left Side: Receipt Image Preview */}
+              <div className="bg-slate-950 p-5 sm:p-6 flex flex-col justify-between items-center md:w-[48%] border-r border-slate-800 min-h-[280px] sm:min-h-[340px] relative">
+                <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-slate-800 text-slate-300 font-mono text-[10px] font-bold uppercase px-2 py-0.5 rounded tracking-wide">
+                  <span>Image {reviewerModalIndex + 1} of {sortedInvoices.length}</span>
+                </div>
+                
+                <button 
+                  onClick={() => setReviewerModalIndex(null)}
+                  aria-label="Close Reviewer Modal"
+                  className="absolute top-3 right-3 text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-800 transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+
+                <div className="flex-1 w-full flex items-center justify-center p-2 mb-3 mt-7 overflow-hidden max-h-[380px]">
+                  {currentInv.customImageUrl ? (
+                    <img 
+                      src={currentInv.customImageUrl} 
+                      alt={`Receipt ${displayIdentifier}`} 
+                      className="max-h-full max-w-full rounded shadow-md object-contain border border-slate-800"
+                    />
+                  ) : (
+                    <div className="text-center p-6 text-slate-500">
+                      <FileImage className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                      <p className="text-xs">No image preview available</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="w-full flex items-center justify-between text-[10px] text-slate-400 font-mono px-1">
+                  <span className="truncate max-w-[180px]">{getItemTitle(currentInv)}</span>
+                  <span className="text-indigo-400 font-bold uppercase tracking-wider">{category}</span>
+                </div>
+              </div>
+
+              {/* Right Side: Data Reviewer & Labeling Fields */}
+              <div className="p-5 sm:p-6 md:w-[52%] flex flex-col justify-between bg-white overflow-y-auto space-y-4">
+                <div className="space-y-4">
+                  <div>
+                    <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest block mb-1">
+                      🏷️ Batch Reviewer
+                    </span>
+                    <h3 id="reviewer-modal-title" className="text-lg font-bold text-slate-900 font-sans tracking-tight leading-none">
+                      Verify & Set Target Values
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                      {category === 'date_number' 
+                        ? 'Verify the 8-digit transaction date (YYYYMMDD) for this receipt image.'
+                        : category === 'phone_number'
+                        ? 'Verify the telephone contact digits for this receipt image.'
+                        : 'Verify the 13-digit Qualified Tax registration number starting with "T".'}
+                    </p>
+                  </div>
+
+                  {/* Visual Confirmation in Reviewer Modal */}
+                  <div className="bg-indigo-50/80 border border-indigo-200/80 rounded-xl p-3 flex items-center justify-between gap-2 shadow-2xs">
+                    <div className="overflow-hidden">
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 block">
+                        Matched Image Identifier
+                      </span>
+                      <p className="text-sm font-bold font-mono text-indigo-950 truncate mt-0.5">
+                        Image ID: {displayIdentifier} {isMatchedFromCsv ? '(Matched from CSV)' : ''}
+                      </p>
+                    </div>
+                    {isMatchedFromCsv ? (
+                      <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                        Matched from CSV
+                      </span>
+                    ) : (
+                      <span className="text-[10px] bg-slate-100 text-slate-600 border border-slate-200 font-bold px-2 py-0.5 rounded-full shrink-0">
+                        Standard Item
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Input Fields */}
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-1">
+                        Expected Transcribed Value <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        placeholder={config[category]?.codePlaceholder || 'Expected Value'}
+                        value={currentInv.expectedNumber || ''}
+                        autoFocus
+                        onChange={(e) => onUpdateCode(currentInv.id, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleNextReview();
+                          }
+                        }}
+                        className="w-full p-2.5 bg-slate-50 border border-slate-300 text-sm text-slate-900 font-mono font-bold rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 tracking-wide text-indigo-700 uppercase"
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Press <strong className="text-slate-700 font-bold">Enter</strong> to save and proceed to next image.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-1">
+                        Invoice Issuer / Store Name
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Aeon Retail Co., Ltd."
+                        value={currentInv.companyName || ''}
+                        onChange={(e) => onUpdateCompany(currentInv.id, e.target.value)}
+                        className="w-full p-2.5 bg-slate-50 border border-slate-300 text-xs text-slate-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Footer Navigation Buttons */}
+                <div className="flex items-center justify-between pt-4 border-t border-slate-100 mt-4 gap-2">
+                  <button
+                    type="button"
+                    onClick={handlePrevReview}
+                    disabled={reviewerModalIndex === 0}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-bold transition flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" /> Prev
+                  </button>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setReviewerModalIndex(null)}
+                      className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition cursor-pointer"
+                    >
+                      Done
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleNextReview}
+                      className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-xs"
+                    >
+                      {reviewerModalIndex < sortedInvoices.length - 1 ? (
+                        <>Next <ChevronRight className="w-3.5 h-3.5" /></>
+                      ) : (
+                        'Finish Review'
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

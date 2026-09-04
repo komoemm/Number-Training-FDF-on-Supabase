@@ -2387,6 +2387,18 @@ export default function App() {
 
                   <div className="space-y-4">
                     <div>
+                      {/* Visual Confirmation of Image ID */}
+                      <div className="mb-2 p-2.5 bg-indigo-50/80 border border-indigo-200/80 rounded-xl flex items-center justify-between shadow-2xs">
+                        <span className="text-xs font-bold font-mono text-indigo-900">
+                          Image ID: {(inv as any).matchedIdentifier || (inv as any).title || inv.companyName || inv.id} {(inv as any).matchedFromCsv ? '(Matched from CSV)' : ''}
+                        </span>
+                        {(inv as any).matchedFromCsv && (
+                          <span className="text-[9px] bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-1.5 py-0.5 rounded-full">
+                            Matched from CSV
+                          </span>
+                        )}
+                      </div>
+
                       <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
                         Expected Transcribed Value <span className="text-rose-500">*</span>
                       </label>
