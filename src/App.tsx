@@ -630,14 +630,14 @@ export default function App() {
         if (data && Array.isArray(data)) {
           const invoices = data.map((row: any) => ({
             id: row.id,
-            expectedNumber: row.expected_number || row.expectedNumber || '',
-            companyName: row.company_name || row.companyName || 'Custom Vendor',
-            invoiceDate: row.invoice_date || row.invoiceDate || '',
-            totalAmount: row.total_amount || row.totalAmount || '',
-            difficulty: row.difficulty || 'medium',
-            style: row.style || 'modern',
-            customImageUrl: row.custom_image_url || row.customImageUrl || '',
-            category: row.category || 'tax_number'
+            category: row.category,
+            expectedNumber: row.expected_number,
+            companyName: row.company_name,
+            invoiceDate: row.invoice_date,
+            totalAmount: row.total_amount,
+            difficulty: row.difficulty,
+            style: row.style,
+            customImageUrl: row.custom_image_url
           }));
           if (invoices.length > 0) {
             setCustomInvoices(invoices);
@@ -911,14 +911,14 @@ export default function App() {
       try {
         const invoicePayloads = newItems.map(item => ({
           id: item.id,
+          category: item.category,
           expected_number: item.expectedNumber,
           company_name: item.companyName,
-          invoice_date: item.invoiceDate || '',
-          total_amount: item.totalAmount || '',
-          difficulty: item.difficulty || 'medium',
-          style: item.style || 'modern',
-          custom_image_url: item.customImageUrl,
-          category: item.category || 'tax_number'
+          invoice_date: item.invoiceDate,
+          total_amount: item.totalAmount,
+          difficulty: item.difficulty,
+          style: item.style,
+          custom_image_url: item.customImageUrl
         }));
         await supabase.from('custom_invoices').upsert(invoicePayloads);
       } catch (err) {
@@ -949,18 +949,18 @@ export default function App() {
 
     if (isSupabaseActive) {
       try {
-        const invoicePayload = {
-          id: newCustom.id,
-          expected_number: newCustom.expectedNumber,
-          company_name: newCustom.companyName,
-          invoice_date: newCustom.invoiceDate || '',
-          total_amount: newCustom.totalAmount || '',
-          difficulty: newCustom.difficulty || 'medium',
-          style: newCustom.style || 'modern',
-          custom_image_url: newCustom.customImageUrl,
-          category: newCustom.category || 'tax_number'
-        };
-        await supabase.from('custom_invoices').upsert(invoicePayload);
+        const item = newCustom;
+        await supabase.from('custom_invoices').upsert({
+          id: item.id,
+          category: item.category,
+          expected_number: item.expectedNumber,
+          company_name: item.companyName,
+          invoice_date: item.invoiceDate,
+          total_amount: item.totalAmount,
+          difficulty: item.difficulty,
+          style: item.style,
+          custom_image_url: item.customImageUrl
+        });
       } catch (err) {
         console.warn('Failed to sync sample invoice to Supabase database:', err);
       }
@@ -1220,7 +1220,7 @@ export default function App() {
   };
 
   /**
-   * Finalizes score aggregation and saves payload to local storage and Firestore.
+   * Finalizes score aggregation and saves payload to local storage and Supabase.
    */
   const finalizeSessionLog = async (completedResults: TypingDetail[], finalCorrect: number, category: TrainingCategory) => {
     setIsTestActive(false);
@@ -1871,9 +1871,20 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-5 bg-slate-50 p-3 rounded-xl border border-slate-150 text-slate-500 text-[11px] flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0" />
-                <span>Standard SLA requires <strong>≥ 95% accuracy</strong> and <strong>Level C or better</strong> to qualify.</span>
+              <div className="mt-5 space-y-2">
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-150 text-slate-500 text-[11px] flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <span>Standard SLA requires <strong>≥ 95% accuracy</strong> and <strong>Level C or better</strong> to qualify.</span>
+                </div>
+
+                <div className="bg-slate-900 text-slate-200 p-3 rounded-xl border border-slate-800 text-[11px] space-y-1 font-mono shadow-xs">
+                  <div className="flex items-center gap-2 text-emerald-400 font-semibold">
+                    <span>🟢 Supabase Cloud Database Connected (Unlimited Reads)</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-indigo-300">
+                    <span>⚡ High-precision performance.now() timer active</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

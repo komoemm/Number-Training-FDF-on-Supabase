@@ -66,7 +66,7 @@ export default function HistoryLogs({ userId, refreshTrigger, isAdmin = false }:
       return;
     }
 
-    // 2. SessionStorage cache check: if cached within 10 minutes, restore from storage without Firestore reads
+    // 2. SessionStorage cache check: if cached within 10 minutes, restore from storage without Supabase reads
     if (!forceCloud) {
       try {
         const cachedRaw = sessionStorage.getItem('cached_session_history');
@@ -106,24 +106,21 @@ export default function HistoryLogs({ userId, refreshTrigger, isAdmin = false }:
         }
 
         if (data && Array.isArray(data)) {
-          data.forEach((row: any) => {
-            const timestampDate = row.created_at ? new Date(row.created_at) : (row.timestamp ? new Date(row.timestamp) : new Date());
-            fetchedSessions.push({
-              id: row.id,
-              userId: row.user_id || row.userId || row.operator_id || 'unknown',
-              operatorId: row.operator_id || row.operatorId || row.user_id || 'unknown',
-              timestamp: timestampDate,
-              totalImagesAttempted: row.total_attempted ?? row.totalImagesAttempted ?? 20,
-              correctEntries: row.correct_entries ?? row.correctEntries ?? 0,
-              averageTimeMs: row.average_time_ms ?? row.averageTimeMs ?? 0,
-              averageSpeed: row.average_speed ?? row.averageSpeed ?? (row.average_time_ms ? +(row.average_time_ms / 1000).toFixed(2) : 0),
-              accuracy: row.accuracy ?? (row.total_attempted > 0 ? Math.round(((row.correct_entries || 0) / row.total_attempted) * 100) : 100),
-              level: row.level,
-              trainingMode: row.training_mode || row.trainingMode || (row.total_attempted > 90 ? 'hard_180' : row.total_attempted > 20 ? 'normal_90' : 'easy_20'),
-              category: row.category || 'tax_number',
-              details: row.details || []
-            });
-          });
+          fetchedSessions = data.map((row: any) => ({
+            id: row.id,
+            userId: row.user_id,
+            operatorId: row.operator_id,
+            category: row.category,
+            trainingMode: row.training_mode,
+            totalImagesAttempted: row.total_attempted,
+            correctEntries: row.correct_entries,
+            averageTimeMs: Number(row.average_time_ms),
+            averageSpeed: Number(row.average_speed),
+            accuracy: Number(row.accuracy),
+            level: row.level,
+            timestamp: new Date(row.created_at),
+            details: row.details || []
+          }));
         }
       } catch (err) {
         console.warn('Unable to load from cloud database. Retrying local cache fallback...', err);

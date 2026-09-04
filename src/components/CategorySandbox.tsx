@@ -68,7 +68,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
-  const [showInstructions, setShowInstructions] = useState<boolean>(false);
+  const [showRules, setShowRules] = useState<boolean>(false);
   const [showPoolCatalog, setShowPoolCatalog] = useState<boolean>(false);
 
   // Category Configuration Meta
@@ -142,20 +142,31 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
             <span className="text-[11px] font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 px-2.5 py-1 rounded-full shrink-0">
               SLA Standard: &lt; {config.slaLimit}
             </span>
-            <button
-              type="button"
-              onClick={() => setShowInstructions(!showInstructions)}
-              className="text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 border border-indigo-200 px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0"
-              aria-expanded={showInstructions}
-            >
-              {showInstructions ? '✕ Hide Guidelines' : '📖 Show Entry Rules & SLA Guidelines (Click to expand)'}
-            </button>
+            {showRules ? (
+              <button
+                type="button"
+                onClick={() => setShowRules(false)}
+                className="text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 border border-indigo-200 px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0"
+                aria-expanded={true}
+              >
+                ✕ Hide Rules
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowRules(true)}
+                className="text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 border border-indigo-200 px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0"
+                aria-expanded={false}
+              >
+                📖 Show Entry Rules & SLA Guidelines
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       {/* 4 Guidelines Cards (Collapsible) */}
-      {showInstructions && (
+      {showRules && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 p-4 bg-slate-50/90 rounded-2xl border border-slate-200 shadow-2xs transition-all duration-200 animate-fade-in">
           <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-widest flex items-center gap-2">
@@ -295,7 +306,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                     onClick={onRefreshPool}
                     disabled={isRefreshingPool}
                     className="text-[9px] bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 disabled:opacity-50"
-                    title="Force refresh custom invoice pool from Firestore"
+                    title="Force refresh custom invoice pool from Supabase"
                   >
                     <RefreshCw className={`w-3 h-3 ${isRefreshingPool ? 'animate-spin text-indigo-600' : ''}`} />
                     <span>Sync/Refresh Pool</span>
