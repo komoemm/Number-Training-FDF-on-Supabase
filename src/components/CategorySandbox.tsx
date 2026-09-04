@@ -690,3 +690,5 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
     </div>
   );
 };
+
+export default CategorySandbox;

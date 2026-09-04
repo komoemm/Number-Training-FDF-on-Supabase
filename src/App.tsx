@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
-import { supabase, isSupabaseActive } from './supabase';
+import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
+import { supabase, isSupabaseActive, isSupabaseConfigured } from './supabase';
 import { 
   generateSampleCustomInvoice, 
   renderReceiptToDataUrl,
@@ -12,21 +12,50 @@ import {
   generateRandomDateNumber,
   generateRandomPhoneNumber
 } from './utils/receiptGenerator';
-import { generateCertificatePDF } from './utils/pdfGenerator';
-import { generateCertificateHTML } from './utils/htmlGenerator';
 import { evaluateCategoryLevel, getCategoryRankDetails, CATEGORY_SLA_CONFIG } from './utils/speedRanking';
 import { GeneratedInvoiceData, TypingDetail, TestSession, TrainingMode, TrainingCategory } from './types';
-import InvoiceViewer from './components/InvoiceViewer';
-import StatsPanel from './components/StatsPanel';
-import HistoryLogs from './components/HistoryLogs';
 import LoginScreen from './components/LoginScreen';
-import { CategorySandbox } from './components/CategorySandbox';
 import { 
   Zap, Keyboard, ShieldAlert, CheckCircle2, ChevronRight, ChevronLeft,
   RotateCcw, LogOut, HelpCircle, Trophy, BarChart2, Check, X,
   Clock, Database, Award, Download, Users, FileText, Calendar, Phone,
   Sparkles, ShieldCheck
 } from 'lucide-react';
+
+// Lazy-loaded heavy components to optimize initial bundle size, LCP, and INP
+const CategorySandbox = lazy(() => import('./components/CategorySandbox').then(m => ({ default: m.default || m.CategorySandbox })));
+const StatsPanel = lazy(() => import('./components/StatsPanel'));
+const HistoryLogs = lazy(() => import('./components/HistoryLogs'));
+const InvoiceViewer = lazy(() => import('./components/InvoiceViewer'));
+
+/**
+ * Accessible minimal fallback loading spinner using Tailwind CSS
+ */
+function LoadingFallback({ 
+  message = 'Loading component...',
+  className = 'p-8 min-h-[140px]'
+}: { 
+  message?: string;
+  className?: string;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      className={`flex flex-col items-center justify-center w-full rounded-2xl bg-slate-50/70 border border-slate-200/60 ${className}`}
+    >
+      <div className="flex items-center space-x-3 text-slate-500">
+        <div
+          className="w-5 h-5 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin shrink-0"
+          aria-hidden="true"
+        />
+        <span className="text-xs font-semibold text-slate-600 tracking-wide font-sans">{message}</span>
+      </div>
+      <span className="sr-only">{message}</span>
+    </div>
+  );
+}
 
 export default function App() {
   // Application & System states
@@ -1342,7 +1371,7 @@ export default function App() {
 
   const currentRank = evaluateRank();
 
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     const rankDetails = getCategoryRankDetails(averageTimeMs, activeTrainingCategory);
 
     const testSessionPayload: TestSession = {
@@ -1360,10 +1389,11 @@ export default function App() {
       details: sessionResults
     };
 
-    generateCertificatePDF(testSessionPayload, rankDetails.level, rankDetails.name);
+    const { generateCertificatePDF } = await import('./utils/pdfGenerator');
+    await generateCertificatePDF(testSessionPayload, rankDetails.level, rankDetails.name);
   };
 
-  const handleDownloadHTML = () => {
+  const handleDownloadHTML = async () => {
     const rankDetails = getCategoryRankDetails(averageTimeMs, activeTrainingCategory);
 
     const testSessionPayload: TestSession = {
@@ -1381,6 +1411,7 @@ export default function App() {
       details: sessionResults
     };
 
+    const { generateCertificateHTML } = await import('./utils/htmlGenerator');
     generateCertificateHTML(testSessionPayload, rankDetails.level, rankDetails.name);
   };
 
@@ -1532,27 +1563,29 @@ export default function App() {
 
                 {/* Tab 1, 2, 3: Category Sandbox Workspaces */}
                 {activeSetupTab === 'tax_number' || activeSetupTab === 'date_number' || activeSetupTab === 'phone_number' ? (
-                  <CategorySandbox
-                    category={activeSetupTab}
-                    invoices={customInvoices.filter(i => (i.category || 'tax_number') === activeSetupTab)}
-                    allInvoices={customInvoices}
-                    onUploadImages={handleCustomImagesUpload}
-                    onAddSample={handleAddSampleToCustomList}
-                    onDeleteInvoice={handleDeleteCustomInvoice}
-                    onUpdateCode={updateCustomInvoiceCode}
-                    onUpdateCompany={updateCustomInvoiceCompany}
-                    onClearPool={handleClearCategoryPool}
-                    onOpenLabelingModal={(idx) => setLabelingModalIndex(idx)}
-                    onStartTest={startCategoryTestingSession}
-                    uploadProgressError={uploadProgressError}
-                    customExpectedCode={customExpectedCode}
-                    setCustomExpectedCode={setCustomExpectedCode}
-                    customCompanyName={customCompanyName}
-                    setCustomCompanyName={setCustomCompanyName}
-                    isAdmin={currentOfflineUser?.role === 'admin'}
-                    onRefreshPool={() => fetchCustomInvoices(true)}
-                    isRefreshingPool={isRefreshingInvoices}
-                  />
+                  <Suspense fallback={<LoadingFallback message="Loading invoice training sandbox..." className="p-12 min-h-[320px]" />}>
+                    <CategorySandbox
+                      category={activeSetupTab}
+                      invoices={customInvoices.filter(i => (i.category || 'tax_number') === activeSetupTab)}
+                      allInvoices={customInvoices}
+                      onUploadImages={handleCustomImagesUpload}
+                      onAddSample={handleAddSampleToCustomList}
+                      onDeleteInvoice={handleDeleteCustomInvoice}
+                      onUpdateCode={updateCustomInvoiceCode}
+                      onUpdateCompany={updateCustomInvoiceCompany}
+                      onClearPool={handleClearCategoryPool}
+                      onOpenLabelingModal={(idx) => setLabelingModalIndex(idx)}
+                      onStartTest={startCategoryTestingSession}
+                      uploadProgressError={uploadProgressError}
+                      customExpectedCode={customExpectedCode}
+                      setCustomExpectedCode={setCustomExpectedCode}
+                      customCompanyName={customCompanyName}
+                      setCustomCompanyName={setCustomCompanyName}
+                      isAdmin={currentOfflineUser?.role === 'admin'}
+                      onRefreshPool={() => fetchCustomInvoices(true)}
+                      isRefreshingPool={isRefreshingInvoices}
+                    />
+                  </Suspense>
                 ) : (
                   /* Tab 4: Trainee Accounts Management Tab (Admin Only) */
                   <div className="space-y-6 animate-fade-in" id="admin-user-management-tab">
@@ -1894,30 +1927,34 @@ export default function App() {
         {isTestActive && expectedDataset[currentIndex] && (
           <div className="space-y-6 animate-fade-in" id="active-test-container">
             {/* Real-time stats header banner */}
-            <StatsPanel
-              currentIndex={currentIndex}
-              totalCount={expectedDataset.length}
-              correctCount={correctCount}
-              elapsedMs={elapsedMs}
-              averageTimeMs={
-                sessionResults.length > 0 
-                  ? Math.round(sessionResults.reduce((sum, r) => sum + r.timeSpentMs, 0) / sessionResults.length) 
-                  : 0
-              }
-              isTestActive={true}
-              trainingMode={trainingMode}
-              category={activeTrainingCategory}
-            />
+            <Suspense fallback={<LoadingFallback message="Loading performance telemetry..." className="p-4 min-h-[90px]" />}>
+              <StatsPanel
+                currentIndex={currentIndex}
+                totalCount={expectedDataset.length}
+                correctCount={correctCount}
+                elapsedMs={elapsedMs}
+                averageTimeMs={
+                  sessionResults.length > 0 
+                    ? Math.round(sessionResults.reduce((sum, r) => sum + r.timeSpentMs, 0) / sessionResults.length) 
+                    : 0
+                }
+                isTestActive={true}
+                trainingMode={trainingMode}
+                category={activeTrainingCategory}
+              />
+            </Suspense>
 
             {/* Split Screen Layout */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
               {/* Left Column: Image Scan Workstation */}
               <div className="lg:col-span-7">
-                <InvoiceViewer
-                  currentInvoice={expectedDataset[currentIndex]}
-                  onImageLoaded={handleInvoiceImageOnLoad}
-                  isLoading={false}
-                />
+                <Suspense fallback={<LoadingFallback message="Loading invoice scanner..." className="p-12 min-h-[420px]" />}>
+                  <InvoiceViewer
+                    currentInvoice={expectedDataset[currentIndex]}
+                    onImageLoaded={handleInvoiceImageOnLoad}
+                    isLoading={false}
+                  />
+                </Suspense>
               </div>
 
               {/* Right Column: Key Entry Node */}
@@ -2095,16 +2132,18 @@ export default function App() {
         {testComplete && (
           <div className="space-y-6 animate-fade-in" id="results-display-screen">
             {/* Real-time stats header banner */}
-            <StatsPanel
-              currentIndex={expectedDataset.length}
-              totalCount={expectedDataset.length}
-              correctCount={correctCount}
-              elapsedMs={0}
-              averageTimeMs={averageTimeMs}
-              isTestActive={false}
-              trainingMode={trainingMode}
-              category={activeTrainingCategory}
-            />
+            <Suspense fallback={<LoadingFallback message="Loading assessment results..." className="p-4 min-h-[90px]" />}>
+              <StatsPanel
+                currentIndex={expectedDataset.length}
+                totalCount={expectedDataset.length}
+                correctCount={correctCount}
+                elapsedMs={0}
+                averageTimeMs={averageTimeMs}
+                isTestActive={false}
+                trainingMode={trainingMode}
+                category={activeTrainingCategory}
+              />
+            </Suspense>
 
             {/* Main results summary block */}
             <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-10 shadow-sm relative overflow-hidden animate-fade-in">
@@ -2259,11 +2298,13 @@ export default function App() {
         )}
 
         {/* 3. Bottom Section: Historical logs */}
-        <HistoryLogs 
-          userId={currentOfflineUser ? currentOfflineUser.username : 'guest'} 
-          refreshTrigger={refreshTrigger}
-          isAdmin={currentOfflineUser?.role === 'admin'}
-        />
+        <Suspense fallback={<LoadingFallback message="Loading session benchmarks..." className="p-12 min-h-[260px]" />}>
+          <HistoryLogs 
+            userId={currentOfflineUser ? currentOfflineUser.username : 'guest'} 
+            refreshTrigger={refreshTrigger}
+            isAdmin={currentOfflineUser?.role === 'admin'}
+          />
+        </Suspense>
 
       </main>
 
