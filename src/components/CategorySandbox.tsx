@@ -129,16 +129,32 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
       return str;
     };
 
-    const headers = ['Image_Identifier', 'Expected_Value', 'Category', 'Issuer_Or_Note'];
+    const headers = [
+      'Image_Identifier',
+      category === 'tax_number' ? 'Expected_Value_13Digits_NoT' : 'Expected_Value',
+      'Category',
+      'Issuer_Or_Note'
+    ];
     const rows: string[] = [headers.join(',')];
 
     if (sortedInvoices.length > 0) {
       sortedInvoices.forEach((inv) => {
         const rawTitle = (inv as any).matchedIdentifier || getItemTitle(inv);
         const cleanTitle = rawTitle.replace(/\.(jpe?g|png|webp|gif|bmp|svg)$/i, '').trim();
-        const expectedVal = inv.expectedNumber || '';
+        let expectedVal = (inv.expectedNumber || '').trim();
         const cat = inv.category || category;
         const note = inv.companyName || inv.note || '';
+
+        // For 'tax_number' category:
+        // Ensure 'Expected_Value' contains ONLY the 13 raw numeric digits.
+        // If current target or fallback code has a leading "T" or "t", automatically strip it:
+        if (cat === 'tax_number') {
+          expectedVal = expectedVal
+            .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+            .replace(/^T/i, '')
+            .replace(/\s+/g, '')
+            .replace(/[-ー―]/g, '');
+        }
 
         rows.push([
           escapeCsv(cleanTitle),
@@ -150,15 +166,21 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
     } else {
       // Pre-populate demonstrative sample row for current category
       let sampleVal = '';
-      if (category === 'tax_number') sampleVal = 'T1234567890123';
-      else if (category === 'date_number') sampleVal = '20260522';
-      else if (category === 'phone_number') sampleVal = '03-1234-5678';
+      let sampleNote = 'Sample Store Tokyo';
+      if (category === 'tax_number') {
+        sampleVal = '1234567890123';
+        sampleNote = 'Enter 13 numeric digits (without T)';
+      } else if (category === 'date_number') {
+        sampleVal = '20260522';
+      } else if (category === 'phone_number') {
+        sampleVal = '03-1234-5678';
+      }
 
       rows.push([
         escapeCsv('sample_receipt_01'),
         escapeCsv(sampleVal),
         escapeCsv(category),
-        escapeCsv('Sample Store Tokyo')
+        escapeCsv(sampleNote)
       ].join(','));
     }
 
@@ -287,16 +309,16 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         const val = (raw || '').trim();
 
         if (cat === 'tax_number') {
-          // Trim all inner spaces
-          const stripped = val.replace(/\s+/g, '');
-          // If 13 digits without leading "T", automatically prepend "T"
-          if (/^\d{13}$/.test(stripped)) {
-            return `T${stripped}`;
-          }
-          if (/^t\d{13}$/i.test(stripped)) {
-            return stripped.toUpperCase();
-          }
-          return stripped.toUpperCase();
+          // Normalize full-width numbers (０-９) to half-width digits (0-9)
+          let tax = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+          // Trim all inner whitespaces
+          tax = tax.replace(/\s+/g, '');
+          // If the imported value contains a leading "T" or "t" (e.g. "T4180001097758"), automatically STRIP the "T" so it becomes pure numeric digits ("4180001097758")
+          tax = tax.replace(/^T/i, '');
+          // Strip any accidental hyphens or delimiters
+          tax = tax.replace(/[-ー―]/g, '');
+          // DO NOT prepend "T" anymore.
+          return tax;
         }
 
         if (cat === 'phone_number') {
@@ -399,13 +421,13 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   const config = {
     tax_number: {
       title: '🧾 Tax Number Data Entry (登録番号)',
-      subtitle: 'Transcribe 13-digit Japanese Qualified Invoice Tax Registration Numbers (T + 13 digits) from receipt images.',
-      inputRule: 'Numbers always begin with "T" followed by 13 digits (e.g. T1234567890123). Hyphens are skipped.',
-      autoAdvance: 'Auto-advances immediately upon typing 14 characters (with T) or 13 digits.',
+      subtitle: 'Transcribe 13-digit Japanese Qualified Invoice Tax Registration Numbers from receipt images.',
+      inputRule: 'Enter 13 numeric digits (without \'T\'). Hyphens are skipped.',
+      autoAdvance: 'Auto-advances immediately upon typing 13 numeric digits.',
       slaTarget: 'Target speed is under 6.00 seconds per invoice with ≥ 95% accuracy.',
-      codePlaceholder: 'T1234567890123',
-      codeLabel: 'Registration Tax Code (T+13 digits)',
-      extractHint: 'Filename auto-detects "T" followed by 13 digits (e.g. receipt_T1234567890123.jpg)',
+      codePlaceholder: '1234567890123',
+      codeLabel: 'Registration Tax Code (13 numeric digits)',
+      extractHint: 'Filename auto-detects 13 numeric digits (e.g. receipt_1234567890123.jpg or receipt_T1234567890123.jpg)',
       slaLimit: '6.00s'
     },
     date_number: {
@@ -599,9 +621,12 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 type="text"
                 placeholder={config.codePlaceholder}
                 value={customExpectedCode}
-                onChange={(e) => setCustomExpectedCode(e.target.value)}
+                onChange={(e) => setCustomExpectedCode(category === 'tax_number' ? e.target.value.replace(/^T/i, '') : e.target.value)}
                 className="w-full p-2.5 bg-white border border-slate-200 text-xs text-slate-800 rounded-xl outline-none focus:border-indigo-500 font-mono font-bold"
               />
+              <p className="text-[10px] text-slate-400 mt-1">
+                {category === 'tax_number' ? "Enter 13 numeric digits (without 'T')" : `Format: ${config.codeLabel}`}
+              </p>
             </div>
             <div>
               <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
@@ -786,8 +811,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                             <span className="text-[9px] text-indigo-600 font-mono font-bold shrink-0">Target:</span>
                             <input
                               type="text"
-                              value={inv.expectedNumber}
-                              onChange={(e) => onUpdateCode(inv.id, e.target.value)}
+                              value={category === 'tax_number' ? (inv.expectedNumber || '').replace(/^T/i, '') : inv.expectedNumber}
+                              onChange={(e) => {
+                                const val = category === 'tax_number' ? e.target.value.replace(/^T/i, '') : e.target.value;
+                                onUpdateCode(inv.id, val);
+                              }}
                               className="w-full text-[10px] font-mono text-indigo-700 bg-transparent hover:bg-slate-50 focus:bg-white border-b border-transparent hover:border-slate-300 focus:border-indigo-500 rounded px-1 py-0.5 outline-none font-bold transition tracking-wider uppercase"
                               title="Click to edit expected transcribed number"
                             />
@@ -922,7 +950,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                             <div className="flex items-center gap-1 text-[9px] font-mono">
                               <span className="text-slate-400 font-bold">Target:</span>
                               <span className="font-bold text-indigo-700 uppercase tracking-wider bg-indigo-50/70 px-1 py-0.2 rounded border border-indigo-100 truncate">
-                                {inv.expectedNumber}
+                                {category === 'tax_number' ? (inv.expectedNumber || '').replace(/^T/i, '') : inv.expectedNumber}
                               </span>
                             </div>
                           </div>
@@ -1198,7 +1226,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                         ? 'Verify the 8-digit transaction date (YYYYMMDD) for this receipt image.'
                         : category === 'phone_number'
                         ? 'Verify the telephone contact digits for this receipt image.'
-                        : 'Verify the 13-digit Qualified Tax registration number starting with "T".'}
+                        : "Enter 13 numeric digits (without 'T')"}
                     </p>
                   </div>
 
@@ -1232,10 +1260,13 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                       </label>
                       <input
                         type="text"
-                        placeholder={config[category]?.codePlaceholder || 'Expected Value'}
-                        value={currentInv.expectedNumber || ''}
+                        placeholder={config[category]?.codePlaceholder || '1234567890123'}
+                        value={category === 'tax_number' ? (currentInv.expectedNumber || '').replace(/^T/i, '') : (currentInv.expectedNumber || '')}
                         autoFocus
-                        onChange={(e) => onUpdateCode(currentInv.id, e.target.value)}
+                        onChange={(e) => {
+                          const val = category === 'tax_number' ? e.target.value.replace(/^T/i, '') : e.target.value;
+                          onUpdateCode(currentInv.id, val);
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
@@ -1245,7 +1276,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                         className="w-full p-2.5 bg-slate-50 border border-slate-300 text-sm text-slate-900 font-mono font-bold rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 tracking-wide text-indigo-700 uppercase"
                       />
                       <p className="text-[10px] text-slate-400 mt-1">
-                        Press <strong className="text-slate-700 font-bold">Enter</strong> to save and proceed to next image.
+                        {category === 'tax_number' ? "Enter 13 numeric digits (without 'T'). " : ''}Press <strong className="text-slate-700 font-bold">Enter</strong> to save and proceed to next image.
                       </p>
                     </div>
 
