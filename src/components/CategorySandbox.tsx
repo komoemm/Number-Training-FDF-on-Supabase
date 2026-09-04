@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
   FileImage,
   FileText,
   Upload,
+  Download,
   Plus,
   Trash2,
   Edit,
@@ -18,7 +19,8 @@ import {
   Clock,
   CheckCircle2,
   AlertCircle,
-  RefreshCw
+  RefreshCw,
+  X
 } from 'lucide-react';
 import { GeneratedInvoiceData, TrainingCategory, TrainingMode } from '../types';
 
@@ -66,10 +68,304 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   isRefreshingPool = false
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const csvFileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [showRules, setShowRules] = useState<boolean>(false);
   const [showPoolCatalog, setShowPoolCatalog] = useState<boolean>(false);
+
+  // CSV Labeling Management Toast & Feedback State
+  interface CsvFeedback {
+    type: 'success' | 'warning' | 'error';
+    message: string;
+    unmatched?: string[];
+  }
+  const [csvToast, setCsvToast] = useState<CsvFeedback | null>(null);
+
+  // Auto-dismiss CSV Toast notification after 8 seconds
+  useEffect(() => {
+    if (csvToast) {
+      const timer = setTimeout(() => {
+        setCsvToast(null);
+      }, 8000);
+      return () => clearTimeout(timer);
+    }
+  }, [csvToast]);
+
+  /**
+   * 2. Template Generator Logic (downloadCsvTemplate):
+   * - Generates standard CSV with UTF-8 BOM ("\uFEFF").
+   * - Headers: "Image_Identifier,Expected_Value,Category,Issuer_Or_Note".
+   * - Smart Pre-population: Populates Image_Identifier with each item's clean title (no extensions),
+   *   pre-sets Category with current sandbox category, and pre-fills target/company.
+   * - Triggers immediate browser download of 'label_template_[category]_[timestamp].csv'.
+   */
+  const downloadCsvTemplate = () => {
+    const escapeCsv = (field: unknown): string => {
+      if (field === null || field === undefined) return '';
+      const str = String(field);
+      if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const headers = ['Image_Identifier', 'Expected_Value', 'Category', 'Issuer_Or_Note'];
+    const rows: string[] = [headers.join(',')];
+
+    if (invoices.length > 0) {
+      invoices.forEach((inv) => {
+        const rawTitle = (inv as any).title || inv.companyName || inv.id || '';
+        const cleanTitle = rawTitle.replace(/\.(jpe?g|png|webp|gif|bmp|svg)$/i, '').trim();
+        const expectedVal = inv.expectedNumber || '';
+        const cat = inv.category || category;
+        const note = inv.companyName || inv.note || '';
+
+        rows.push([
+          escapeCsv(cleanTitle),
+          escapeCsv(expectedVal),
+          escapeCsv(cat),
+          escapeCsv(note)
+        ].join(','));
+      });
+    } else {
+      // Pre-populate demonstrative sample row for current category
+      let sampleVal = '';
+      if (category === 'tax_number') sampleVal = 'T1234567890123';
+      else if (category === 'date_number') sampleVal = '20260522';
+      else if (category === 'phone_number') sampleVal = '03-1234-5678';
+
+      rows.push([
+        escapeCsv('sample_receipt_01'),
+        escapeCsv(sampleVal),
+        escapeCsv(category),
+        escapeCsv('Sample Store Tokyo')
+      ].join(','));
+    }
+
+    const csvContent = '\uFEFF' + rows.join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `label_template_${category}_${timestamp}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  /**
+   * 3. Standard CSV Parser & Validation Logic (handleCsvImport):
+   * - Parses uploaded CSV rows safely handling quotes and linebreaks.
+   * - Category-Aware Sanitization:
+   *   * tax_number: Trims spaces. If 13 digits without leading "T", automatically prepends "T". Uppercases.
+   *   * phone_number: Trims spaces, normalizes full-width digits to half-width, preserves hyphens.
+   *   * date_entry / date_number: Normalizes date delimiters (slashes/dashes/dots/kanji) into standard 8-digit date YYYYMMDD.
+   * - Matches with Active Pool items by comparing Image_Identifier against item.title / companyName / id
+   *   (ignoring case, extensions, and surrounding spaces).
+   * 4. State Updates & Feedback:
+   * - Bulk-updates matched items with new expected values.
+   * - Burmese toast notification summarizing results.
+   * - Logs unmatched identifiers and alerts user.
+   */
+  const handleCsvImport = async (file: File) => {
+    try {
+      const text = await file.text();
+      // Remove UTF-8 BOM if present
+      const cleanText = text.replace(/^\uFEFF/, '');
+      
+      // Parse CSV into rows & fields safely handling RFC 4180 quotes
+      const parsedRows: string[][] = [];
+      let currentRow: string[] = [];
+      let currentField = '';
+      let insideQuotes = false;
+
+      for (let i = 0; i < cleanText.length; i++) {
+        const char = cleanText[i];
+        const nextChar = cleanText[i + 1];
+
+        if (char === '"') {
+          if (insideQuotes && nextChar === '"') {
+            currentField += '"';
+            i++;
+          } else {
+            insideQuotes = !insideQuotes;
+          }
+        } else if (char === ',' && !insideQuotes) {
+          currentRow.push(currentField.trim());
+          currentField = '';
+        } else if ((char === '\r' || char === '\n') && !insideQuotes) {
+          if (char === '\r' && nextChar === '\n') {
+            i++;
+          }
+          currentRow.push(currentField.trim());
+          if (currentRow.length > 1 || (currentRow.length === 1 && currentRow[0] !== '')) {
+            parsedRows.push(currentRow);
+          }
+          currentRow = [];
+          currentField = '';
+        } else {
+          currentField += char;
+        }
+      }
+      if (currentField || currentRow.length > 0) {
+        currentRow.push(currentField.trim());
+        if (currentRow.length > 1 || (currentRow.length === 1 && currentRow[0] !== '')) {
+          parsedRows.push(currentRow);
+        }
+      }
+
+      if (parsedRows.length === 0) {
+        setCsvToast({
+          type: 'error',
+          message: 'CSV ဖိုင်တွင် ဒေတာ အချက်အလက် မရှိပါ။ (Uploaded CSV is empty)'
+        });
+        return;
+      }
+
+      // Check if row 0 is header row
+      const firstRowNorm = parsedRows[0].map(h => h.toLowerCase().replace(/[\s_\-]+/g, ''));
+      const hasHeader = firstRowNorm.some(h =>
+        h.includes('identifier') || h.includes('image') || h.includes('expect') || h.includes('target') || h.includes('value') || h.includes('code') || h === 'title' || h === 'id'
+      );
+
+      let idCol = 0;
+      let valCol = 1;
+      let noteCol = 3;
+      let dataRows = parsedRows;
+
+      if (hasHeader) {
+        idCol = firstRowNorm.findIndex(h =>
+          h.includes('identifier') || h.includes('image') || h.includes('file') || h === 'title' || h === 'id' || h === 'name'
+        );
+        valCol = firstRowNorm.findIndex(h =>
+          h.includes('expect') || h.includes('target') || h.includes('value') || h.includes('code') || h.includes('number')
+        );
+        noteCol = firstRowNorm.findIndex(h =>
+          h.includes('issuer') || h.includes('note') || h.includes('company') || h.includes('store')
+        );
+
+        if (idCol === -1) idCol = 0;
+        if (valCol === -1) valCol = 1;
+        dataRows = parsedRows.slice(1);
+      }
+
+      const normalizeKey = (val: string): string => {
+        return (val || '')
+          .trim()
+          .replace(/\.(jpe?g|png|webp|gif|bmp|svg)$/i, '')
+          .toLowerCase()
+          .replace(/[\s_\-]+/g, '');
+      };
+
+      const sanitizeValue = (raw: string, cat: string): string => {
+        const val = (raw || '').trim();
+
+        if (cat === 'tax_number') {
+          // Trim all inner spaces
+          const stripped = val.replace(/\s+/g, '');
+          // If 13 digits without leading "T", automatically prepend "T"
+          if (/^\d{13}$/.test(stripped)) {
+            return `T${stripped}`;
+          }
+          if (/^t\d{13}$/i.test(stripped)) {
+            return stripped.toUpperCase();
+          }
+          return stripped.toUpperCase();
+        }
+
+        if (cat === 'phone_number') {
+          // Normalize full-width numbers (０-９) to half-width (0-9)
+          let phone = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+          // Normalize full-width hyphens
+          phone = phone.replace(/[ー－―]/g, '-');
+          // Trim surrounding spaces, preserve hyphens
+          phone = phone.trim();
+          return phone;
+        }
+
+        if (cat === 'date_entry' || cat === 'date_number') {
+          // Normalize full-width numbers
+          let dateStr = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+          // Normalize date delimiters (slashes/dashes/dots/kanji)
+          const dateParts = dateStr.split(/[/.\-年日月\s]+/).filter(Boolean);
+          if (dateParts.length >= 3 && dateParts[0].length === 4) {
+            const y = dateParts[0];
+            const m = dateParts[1].padStart(2, '0');
+            const d = dateParts[2].padStart(2, '0');
+            return `${y}${m}${d}`;
+          }
+          // If already digits or delimiter separated, strip delimiters
+          return dateStr.replace(/[/.\-年日月\s]/g, '');
+        }
+
+        return val;
+      };
+
+      let updatedCount = 0;
+      const unmatchedIdentifiers: string[] = [];
+
+      dataRows.forEach((row) => {
+        const rawIdentifier = (row[idCol] || '').trim();
+        const rawExpectedVal = (row[valCol] || '').trim();
+        const rawNote = noteCol !== -1 && row[noteCol] ? row[noteCol].trim() : '';
+
+        if (!rawIdentifier) return;
+
+        const cleanKey = normalizeKey(rawIdentifier);
+
+        // Match with Active Pool items by comparing Image_Identifier against item.title
+        // (ignoring case, extensions, and surrounding spaces)
+        const matchedItem = invoices.find((inv) => {
+          const title = (inv as any).title || inv.companyName || '';
+          return normalizeKey(title) === cleanKey || normalizeKey(inv.id) === cleanKey;
+        });
+
+        if (matchedItem) {
+          const sanitizedVal = sanitizeValue(rawExpectedVal, matchedItem.category || category);
+          onUpdateCode(matchedItem.id, sanitizedVal);
+          if (rawNote && onUpdateCompany) {
+            onUpdateCompany(matchedItem.id, rawNote);
+          }
+          updatedCount++;
+        } else {
+          unmatchedIdentifiers.push(rawIdentifier);
+        }
+      });
+
+      // 4. State Updates & Feedback
+      if (unmatchedIdentifiers.length > 0) {
+        console.warn('[CSV Import] Active Pool တွင် မတွေ့ရှိသော ပုံအမည်များ (Unmatched Image Identifiers):', unmatchedIdentifiers);
+      }
+
+      if (updatedCount > 0 && unmatchedIdentifiers.length === 0) {
+        setCsvToast({
+          type: 'success',
+          message: `CSV မှ ပုံ ${updatedCount}/${invoices.length} ပုံအတွက် သတ်မှတ်တန်ဖိုးများကို အောင်မြင်စွာ Update လုပ်ပြီးပါပြီ။`
+        });
+      } else if (updatedCount > 0 && unmatchedIdentifiers.length > 0) {
+        setCsvToast({
+          type: 'warning',
+          message: `CSV မှ ပုံ ${updatedCount}/${invoices.length} ပုံအတွက် သတ်မှတ်တန်ဖိုးများကို Update လုပ်ပြီးပါပြီ။`,
+          unmatched: unmatchedIdentifiers
+        });
+      } else {
+        setCsvToast({
+          type: 'error',
+          message: `CSV မှ ပုံအမည်များကို Active Pool တွင် ရှာမတွေ့ပါ။ (${unmatchedIdentifiers.length} ခု မတွေ့ရှိပါ)`,
+          unmatched: unmatchedIdentifiers
+        });
+      }
+    } catch (err: any) {
+      console.error('[CSV Import Error]', err);
+      setCsvToast({
+        type: 'error',
+        message: `CSV ဖတ်ရှုရာတွင် ချို့ယွင်းချက် ဖြစ်ပေါ်ပါသည်: ${err?.message || 'Invalid CSV format'}`
+      });
+    }
+  };
 
   // Category Configuration Meta
   const config = {
@@ -295,12 +591,49 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
           {/* Catalog List of Loaded Images (Admin Editable) */}
           <div className="space-y-2 pt-3 border-t border-slate-200">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="text-[10px] uppercase font-bold tracking-widest text-slate-500 flex items-center gap-1">
                 <FileImage className="w-3.5 h-3.5 text-indigo-600" /> Active Pool Images ({invoices.length})
               </span>
               
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                {/* 1. Two-Way Standard CSV Label Template Management Buttons */}
+                <button
+                  type="button"
+                  onClick={downloadCsvTemplate}
+                  className="text-[9px] bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 border border-indigo-200 text-indigo-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 shadow-2xs"
+                  title="Download standard CSV label template pre-populated with active pool images"
+                  aria-label="Download CSV Template"
+                >
+                  <Download className="w-3 h-3 text-indigo-600" />
+                  <span>Download CSV Template</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => csvFileInputRef.current?.click()}
+                  className="text-[9px] bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-200 text-emerald-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 shadow-2xs"
+                  title="Import CSV labels to batch update expected transcription values"
+                  aria-label="Import CSV Labels"
+                >
+                  <Upload className="w-3 h-3 text-emerald-600" />
+                  <span>Import CSV Labels</span>
+                </button>
+
+                {/* Hidden CSV file input */}
+                <input
+                  ref={csvFileInputRef}
+                  type="file"
+                  accept=".csv, text/csv, application/vnd.ms-excel"
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files[0]) {
+                      handleCsvImport(e.target.files[0]);
+                      e.target.value = '';
+                    }
+                  }}
+                />
+
                 {onRefreshPool && (
                   <button
                     onClick={onRefreshPool}
@@ -328,6 +661,48 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 )}
               </div>
             </div>
+
+            {/* CSV Import Feedback & Burmese Toast Notification */}
+            {csvToast && (
+              <div 
+                className={`p-3 rounded-xl text-xs flex items-start justify-between gap-2 border shadow-2xs transition-all animate-fade-in ${
+                  csvToast.type === 'success' 
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-900' 
+                    : csvToast.type === 'warning'
+                    ? 'bg-amber-50 border-amber-300 text-amber-900'
+                    : 'bg-rose-50 border-rose-300 text-rose-900'
+                }`}
+                role="alert"
+              >
+                <div className="flex items-start gap-2">
+                  {csvToast.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className={`w-4 h-4 shrink-0 mt-0.5 ${csvToast.type === 'warning' ? 'text-amber-600' : 'text-rose-600'}`} />
+                  )}
+                  <div className="space-y-1">
+                    <p className="font-semibold text-xs leading-relaxed">{csvToast.message}</p>
+                    {csvToast.unmatched && csvToast.unmatched.length > 0 && (
+                      <p className="text-[11px] opacity-90 font-mono leading-tight">
+                        သတိပေးချက်: Active Pool တွင် မတွေ့ရှိသော ပုံအမည်များ ({csvToast.unmatched.length} ခု):{' '}
+                        <span className="font-bold">
+                          {csvToast.unmatched.slice(0, 4).join(', ')}
+                          {csvToast.unmatched.length > 4 ? ` (+${csvToast.unmatched.length - 4} ခု)` : ''}
+                        </span>
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCsvToast(null)}
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer transition shrink-0"
+                  aria-label="Dismiss notification"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
 
             {invoices.length === 0 ? (
               <div className="border border-slate-200 rounded-xl p-6 text-center bg-white">
@@ -443,13 +818,24 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
           {/* Read-Only Invoice Catalog Pool for Trainee (Collapsible Accordion) */}
           {showPoolCatalog && (
             <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 shadow-2xs space-y-2.5 animate-fade-in">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2 flex-wrap gap-2">
                 <span className="text-[10px] uppercase font-bold tracking-widest text-slate-600 flex items-center gap-1.5">
                   <FileImage className="w-3.5 h-3.5 text-indigo-600" /> Verified Pool Images ({invoices.length})
                 </span>
-                <span className="text-[9px] bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-0.5 rounded font-bold uppercase tracking-wider">
-                  Read-Only Training Queue
-                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={downloadCsvTemplate}
+                    className="text-[9px] bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer transition shadow-2xs"
+                    title="Export verified labels as CSV template"
+                  >
+                    <Download className="w-3 h-3 text-indigo-600" />
+                    <span>Download CSV Template</span>
+                  </button>
+                  <span className="text-[9px] bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-0.5 rounded font-bold uppercase tracking-wider">
+                    Read-Only Training Queue
+                  </span>
+                </div>
               </div>
 
               {invoices.length === 0 ? (
