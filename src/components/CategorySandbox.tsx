@@ -22,13 +22,26 @@ import {
   RefreshCw,
   X,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Save,
+  Check
 } from 'lucide-react';
 import { GeneratedInvoiceData, TrainingCategory, TrainingMode } from '../types';
+import { supabase } from '../supabase';
+
+export interface PoolItem extends GeneratedInvoiceData {
+  customImageUrl?: string;
+  title: string;
+  target: string;
+  issuer: string;
+  isSynced?: boolean;
+  matchedFromCsv?: boolean;
+  matchedIdentifier?: string;
+}
 
 interface CategorySandboxProps {
   category: TrainingCategory;
-  invoices: (GeneratedInvoiceData & { customImageUrl?: string })[];
+  invoices: (GeneratedInvoiceData & { customImageUrl?: string; title?: string })[];
   onUploadImages: (files: FileList | File[], category: TrainingCategory) => Promise<void>;
   onAddSample: (category: TrainingCategory) => void;
   onDeleteInvoice: (id: string) => void;
@@ -48,6 +61,53 @@ interface CategorySandboxProps {
   isRefreshingPool?: boolean;
 }
 
+// 1. Helper to extract clean image title/identifier consistently
+export const getItemTitle = (item: any): string => {
+  if (!item) return '';
+  const raw = item.title || item.name || item.companyName || item.id || '';
+  return String(raw).trim();
+};
+
+// 2. Robust Normalized Matching Helper:
+// Strip file extensions, trim spaces, strip leading zeros, convert to lowercase
+export const normalizeKey = (val: string): string => {
+  if (!val) return '';
+  const cleaned = String(val)
+    .replace(/\.(jpe?g|png|webp|gif|bmp|svg)$/i, '')
+    .trim()
+    .toLowerCase();
+  const noLeadingZeros = cleaned.replace(/^0+/, '');
+  return noLeadingZeros || cleaned;
+};
+
+// 3. Category-Aware Target Cleaning Helper:
+// For tax_number: converts full-width numbers, strips leading "T"/"t", ensures pure numeric digits only
+export const cleanEnteredTarget = (raw: string, cat: TrainingCategory): string => {
+  const val = (raw || '').trim();
+  if (cat === 'tax_number') {
+    let tax = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+    tax = tax.replace(/^T/i, '');
+    tax = tax.replace(/\D/g, '');
+    return tax;
+  }
+  if (cat === 'date_number') {
+    let dateStr = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+    const dateParts = dateStr.split(/[/.\-年日月\s]+/).filter(Boolean);
+    if (dateParts.length >= 3 && dateParts[0].length === 4) {
+      const y = dateParts[0];
+      const m = dateParts[1].padStart(2, '0');
+      const d = dateParts[2].padStart(2, '0');
+      return `${y}${m}${d}`;
+    }
+    return dateStr.replace(/\D/g, '');
+  }
+  if (cat === 'phone_number') {
+    let phone = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+    return phone.replace(/[ー－―]/g, '-').replace(/\s+/g, '').trim();
+  }
+  return val;
+};
+
 export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   category,
   invoices,
@@ -57,8 +117,6 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   onUpdateCode,
   onUpdateCompany,
   onClearPool,
-  onOpenLabelingModal,
-  allInvoices,
   onStartTest,
   uploadProgressError,
   customExpectedCode,
@@ -78,46 +136,281 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   const [reviewerModalIndex, setReviewerModalIndex] = useState<number | null>(null);
   const [matchedCsvMap, setMatchedCsvMap] = useState<Record<string, string>>({});
 
-  // Helper to extract clean image title/identifier consistently
-  const getItemTitle = (item: GeneratedInvoiceData & { customImageUrl?: string; title?: string }): string => {
-    return (item.title || (item as any).title || item.companyName || item.id || '').trim();
-  };
+  // Active state 'poolItems' with complete hydration and persistence metadata
+  const [poolItems, setPoolItems] = useState<PoolItem[]>([]);
+  const [lastSavedId, setLastSavedId] = useState<string | null>(null);
 
-  // 1. Natural Sorting for Active Pool Images:
-  // Whenever images are loaded or set into state, sort them using natural alphanumeric sort so that image '2' comes before '10'
-  const sortedInvoices = useMemo(() => {
-    return [...invoices].sort((a, b) => {
-      const titleA = getItemTitle(a);
-      const titleB = getItemTitle(b);
-      return titleA.localeCompare(titleB, undefined, { numeric: true, sensitivity: 'base' });
-    });
-  }, [invoices]);
+  // Modal temporary edit state
+  const [modalTarget, setModalTarget] = useState<string>('');
+  const [modalIssuer, setModalIssuer] = useState<string>('');
+  const [isSavingCode, setIsSavingCode] = useState<boolean>(false);
 
-  // CSV Labeling Management Toast & Feedback State
-  interface CsvFeedback {
+  // Toast & Feedback State
+  interface ToastFeedback {
     type: 'success' | 'warning' | 'error';
     message: string;
     unmatched?: string[];
   }
-  const [csvToast, setCsvToast] = useState<CsvFeedback | null>(null);
+  const [toastFeedback, setToastFeedback] = useState<ToastFeedback | null>(null);
 
-  // Auto-dismiss CSV Toast notification after 8 seconds
+  // Auto-dismiss toast feedback after 6 seconds
   useEffect(() => {
-    if (csvToast) {
+    if (toastFeedback) {
       const timer = setTimeout(() => {
-        setCsvToast(null);
-      }, 8000);
+        setToastFeedback(null);
+      }, 6000);
       return () => clearTimeout(timer);
     }
-  }, [csvToast]);
+  }, [toastFeedback]);
+
+  // 3. Natural Sort:
+  // Maintain natural alphanumeric sort for all pool items so that item '2' comes before '10'
+  const sortedPoolItems = useMemo(() => {
+    return [...poolItems].sort((a, b) => {
+      const titleA = a.title || getItemTitle(a);
+      const titleB = b.title || getItemTitle(b);
+      return titleA.localeCompare(titleB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  }, [poolItems]);
 
   /**
-   * 2. Template Generator Logic (downloadCsvTemplate):
+   * 2. Auto-Hydrate Targets on Image Pool Load:
+   * - In 'loadPoolImages' (or whenever images are fetched from Supabase storage or set):
+   *   * Fetch saved targets from Supabase table 'training_labels' for the current category:
+   *     const { data: dbLabels } = await supabase.from('training_labels').select('*').eq('category', category);
+   *   * Create a lookup map: key = normalizeKey(row.image_identifier), value = row.expected_value.
+   *   * Map each pool item: if lookup map has the key, set item.target = value and item.issuer = row.issuer_or_note.
+   *   * Fallback to LocalStorage cache if Supabase table has not yet loaded.
+   */
+  const loadPoolImages = async (sourceInvoices: (GeneratedInvoiceData & { customImageUrl?: string; title?: string })[]) => {
+    const cacheKey = `training_labels_cache_${category}`;
+    let localCache: Record<string, { expected_value: string; issuer_or_note?: string }> = {};
+
+    // Step A: Immediately apply LocalStorage cache fallback (zero network latency)
+    try {
+      const cachedRaw = localStorage.getItem(cacheKey);
+      if (cachedRaw) {
+        localCache = JSON.parse(cachedRaw);
+      }
+    } catch (e) {
+      console.warn('[Auto-Hydrate] Failed to read local storage cache:', e);
+    }
+
+    const initialMappedItems: PoolItem[] = sourceInvoices.map((inv) => {
+      const title = getItemTitle(inv);
+      const normKey = normalizeKey(title);
+      const cached = localCache[normKey];
+      const targetVal = cached?.expected_value
+        ? cleanEnteredTarget(cached.expected_value, category)
+        : cleanEnteredTarget(inv.expectedNumber || '', category);
+      const issuerVal = (cached?.issuer_or_note !== undefined ? cached.issuer_or_note : inv.companyName) || '';
+
+      return {
+        ...inv,
+        title,
+        target: targetVal,
+        expectedNumber: targetVal,
+        issuer: issuerVal,
+        companyName: issuerVal || inv.companyName,
+        isSynced: !!cached
+      };
+    });
+
+    setPoolItems(initialMappedItems);
+
+    // Step B: Fetch saved targets from Supabase table 'training_labels' for the current category
+    try {
+      const { data: dbLabels, error } = await supabase
+        .from('training_labels')
+        .select('*')
+        .eq('category', category);
+
+      if (!error && Array.isArray(dbLabels)) {
+        // Create lookup map: key = normalizeKey(row.image_identifier), value = row.expected_value
+        const lookupMap = new Map<string, { expected_value: string; issuer_or_note?: string }>();
+        const newCache: Record<string, { expected_value: string; issuer_or_note?: string }> = { ...localCache };
+
+        dbLabels.forEach((row: any) => {
+          if (row.image_identifier) {
+            const key = normalizeKey(row.image_identifier);
+            const cleanVal = cleanEnteredTarget(row.expected_value || '', category);
+            lookupMap.set(key, {
+              expected_value: cleanVal,
+              issuer_or_note: row.issuer_or_note || ''
+            });
+            newCache[key] = {
+              expected_value: cleanVal,
+              issuer_or_note: row.issuer_or_note || ''
+            };
+          }
+        });
+
+        // Update LocalStorage cache with the complete remote set
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(newCache));
+        } catch (e) {
+          console.warn('[Auto-Hydrate] Failed to update localStorage mirror cache:', e);
+        }
+
+        // Map each pool item: if lookup map has the key, set item.target = value and item.issuer = row.issuer_or_note
+        setPoolItems((prevItems) => {
+          return prevItems.map((item) => {
+            const itemKey = normalizeKey(item.title || getItemTitle(item));
+            if (lookupMap.has(itemKey)) {
+              const record = lookupMap.get(itemKey)!;
+              const cleanVal = record.expected_value;
+              const issuerVal = record.issuer_or_note || item.issuer;
+
+              if (cleanVal !== item.expectedNumber) {
+                onUpdateCode(item.id, cleanVal);
+              }
+              if (record.issuer_or_note && record.issuer_or_note !== item.companyName && onUpdateCompany) {
+                onUpdateCompany(item.id, record.issuer_or_note);
+              }
+
+              return {
+                ...item,
+                target: cleanVal,
+                expectedNumber: cleanVal,
+                issuer: issuerVal,
+                companyName: issuerVal || item.companyName,
+                isSynced: true
+              };
+            }
+            return item;
+          });
+        });
+      }
+    } catch (err) {
+      console.warn('[Auto-Hydrate] Operating offline, fallback cache remains active:', err);
+    }
+  };
+
+  // Run auto-hydration whenever the category or source invoices change
+  useEffect(() => {
+    loadPoolImages(invoices);
+  }, [category, invoices]);
+
+  /**
+   * 1. Persistent Storage Integration on Save:
+   * In 'handleSaveVerifyCode':
+   *   * Clean the entered target (if category === 'tax_number', strip any leading "T"/"t" and ensure pure numeric digits).
+   *   * Update the active state 'poolItems'.
+   *   * Immediately persist to Supabase:
+   *     await supabase.from('training_labels').upsert({
+   *       category: category,
+   *       image_identifier: normalizeKey(reviewingItem.title),
+   *       expected_value: cleanTarget,
+   *       issuer_or_note: issuerNote.trim()
+   *     }, { onConflict: 'category,image_identifier' });
+   *   * Also update a LocalStorage mirror (`training_labels_cache_${category}`) so that targets persist even across full page reloads without network latency.
+   */
+  const handleSaveVerifyCode = async (
+    targetInput: string,
+    issuerInput: string,
+    itemToSave?: PoolItem
+  ) => {
+    const reviewingItem = itemToSave || (reviewerModalIndex !== null ? sortedPoolItems[reviewerModalIndex] : null);
+    if (!reviewingItem) return;
+
+    setIsSavingCode(true);
+
+    // Clean entered target
+    const cleanTarget = cleanEnteredTarget(targetInput, category);
+    const issuerNote = (issuerInput || '').trim();
+    const itemTitle = reviewingItem.title || getItemTitle(reviewingItem);
+    const normalizedKey = normalizeKey(itemTitle);
+
+    // Update active state 'poolItems'
+    setPoolItems((prev) =>
+      prev.map((item) => {
+        if (item.id === reviewingItem.id) {
+          return {
+            ...item,
+            target: cleanTarget,
+            expectedNumber: cleanTarget,
+            issuer: issuerNote,
+            companyName: issuerNote || item.companyName,
+            isSynced: true
+          };
+        }
+        return item;
+      })
+    );
+
+    // Propagate to parent state
+    onUpdateCode(reviewingItem.id, cleanTarget);
+    if (onUpdateCompany) {
+      onUpdateCompany(reviewingItem.id, issuerNote);
+    }
+
+    // Update LocalStorage mirror (`training_labels_cache_${category}`)
+    const cacheKey = `training_labels_cache_${category}`;
+    try {
+      const rawCache = localStorage.getItem(cacheKey);
+      const cacheMap: Record<string, { expected_value: string; issuer_or_note?: string }> = rawCache ? JSON.parse(rawCache) : {};
+      cacheMap[normalizedKey] = {
+        expected_value: cleanTarget,
+        issuer_or_note: issuerNote
+      };
+      localStorage.setItem(cacheKey, JSON.stringify(cacheMap));
+    } catch (e) {
+      console.warn('Failed to update local cache mirror:', e);
+    }
+
+    // Immediately persist to Supabase
+    try {
+      const { error } = await supabase.from('training_labels').upsert({
+        category: category,
+        image_identifier: normalizeKey(reviewingItem.title),
+        expected_value: cleanTarget,
+        issuer_or_note: issuerNote.trim()
+      }, { onConflict: 'category,image_identifier' });
+
+      if (error) {
+        console.warn('Supabase upsert warning:', error);
+        setToastFeedback({
+          type: 'warning',
+          message: 'ကွန်ရက်မရရှိပါသဖြင့် အချက်အလက်ကို သင့်စက်တွင်း (Local Cache) ၌သာ သိမ်းဆည်းထားပါသည်။'
+        });
+      } else {
+        setLastSavedId(reviewingItem.id);
+        setToastFeedback({
+          type: 'success',
+          message: 'သတ်မှတ်တန်ဖိုးကို Database တွင် အောင်မြင်စွာ သိမ်းဆည်းပြီးပါပြီ။'
+        });
+      }
+    } catch (err) {
+      console.warn('Network offline or error during Supabase upsert:', err);
+      setToastFeedback({
+        type: 'warning',
+        message: 'ကွန်ရက်မရရှိပါသဖြင့် အချက်အလက်ကို သင့်စက်တွင်း (Local Cache) ၌သာ သိမ်းဆည်းထားပါသည်။'
+      });
+    } finally {
+      setIsSavingCode(false);
+    }
+  };
+
+  // Keep modal input fields in sync with the currently active reviewed item
+  const activeReviewItem = reviewerModalIndex !== null && sortedPoolItems[reviewerModalIndex]
+    ? sortedPoolItems[reviewerModalIndex]
+    : null;
+  const activeReviewItemId = activeReviewItem ? activeReviewItem.id : null;
+
+  useEffect(() => {
+    if (activeReviewItem) {
+      const initialTarget = category === 'tax_number'
+        ? (activeReviewItem.target || activeReviewItem.expectedNumber || '').replace(/^T/i, '')
+        : (activeReviewItem.target || activeReviewItem.expectedNumber || '');
+      setModalTarget(initialTarget);
+      setModalIssuer(activeReviewItem.issuer || activeReviewItem.companyName || '');
+    }
+  }, [activeReviewItemId, category]);
+
+  /**
+   * Template Generator Logic (downloadCsvTemplate):
    * - Generates standard CSV with UTF-8 BOM ("\uFEFF").
    * - Headers: "Image_Identifier,Expected_Value,Category,Issuer_Or_Note".
-   * - Smart Pre-population: Populates Image_Identifier with each item's clean title (no extensions),
-   *   pre-sets Category with current sandbox category, and pre-fills target/company.
-   * - Triggers immediate browser download of 'label_template_[category]_[timestamp].csv'.
    */
   const downloadCsvTemplate = () => {
     const escapeCsv = (field: unknown): string => {
@@ -137,24 +430,13 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
     ];
     const rows: string[] = [headers.join(',')];
 
-    if (sortedInvoices.length > 0) {
-      sortedInvoices.forEach((inv) => {
-        const rawTitle = (inv as any).matchedIdentifier || getItemTitle(inv);
+    if (sortedPoolItems.length > 0) {
+      sortedPoolItems.forEach((inv) => {
+        const rawTitle = inv.title || inv.matchedIdentifier || getItemTitle(inv);
         const cleanTitle = rawTitle.replace(/\.(jpe?g|png|webp|gif|bmp|svg)$/i, '').trim();
-        let expectedVal = (inv.expectedNumber || '').trim();
+        const expectedVal = cleanEnteredTarget(inv.target || inv.expectedNumber || '', category);
         const cat = inv.category || category;
-        const note = inv.companyName || inv.note || '';
-
-        // For 'tax_number' category:
-        // Ensure 'Expected_Value' contains ONLY the 13 raw numeric digits.
-        // If current target or fallback code has a leading "T" or "t", automatically strip it:
-        if (cat === 'tax_number') {
-          expectedVal = expectedVal
-            .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
-            .replace(/^T/i, '')
-            .replace(/\s+/g, '')
-            .replace(/[-ー―]/g, '');
-        }
+        const note = inv.issuer || inv.companyName || inv.note || '';
 
         rows.push([
           escapeCsv(cleanTitle),
@@ -163,34 +445,14 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
           escapeCsv(note)
         ].join(','));
       });
-    } else {
-      // Pre-populate demonstrative sample row for current category
-      let sampleVal = '';
-      let sampleNote = 'Sample Store Tokyo';
-      if (category === 'tax_number') {
-        sampleVal = '1234567890123';
-        sampleNote = 'Enter 13 numeric digits (without T)';
-      } else if (category === 'date_number') {
-        sampleVal = '20260522';
-      } else if (category === 'phone_number') {
-        sampleVal = '03-1234-5678';
-      }
-
-      rows.push([
-        escapeCsv('sample_receipt_01'),
-        escapeCsv(sampleVal),
-        escapeCsv(category),
-        escapeCsv(sampleNote)
-      ].join(','));
     }
 
     const csvContent = '\uFEFF' + rows.join('\r\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `label_template_${category}_${timestamp}.csv`);
+    link.href = url;
+    link.setAttribute('download', `label_template_${category}_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -198,26 +460,14 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   };
 
   /**
-   * 3. Standard CSV Parser & Validation Logic (handleCsvImport):
-   * - Parses uploaded CSV rows safely handling quotes and linebreaks.
-   * - Category-Aware Sanitization:
-   *   * tax_number: Trims spaces. If 13 digits without leading "T", automatically prepends "T". Uppercases.
-   *   * phone_number: Trims spaces, normalizes full-width digits to half-width, preserves hyphens.
-   *   * date_entry / date_number: Normalizes date delimiters (slashes/dashes/dots/kanji) into standard 8-digit date YYYYMMDD.
-   * - Matches with Active Pool items by comparing Image_Identifier against item.title / companyName / id
-   *   (ignoring case, extensions, and surrounding spaces).
-   * 4. State Updates & Feedback:
-   * - Bulk-updates matched items with new expected values.
-   * - Burmese toast notification summarizing results.
-   * - Logs unmatched identifiers and alerts user.
+   * CSV Parser & Bulk Matcher (handleCsvImport):
+   * Imports labels and updates both active state, LocalStorage mirror, and Supabase.
    */
   const handleCsvImport = async (file: File) => {
     try {
       const text = await file.text();
-      // Remove UTF-8 BOM if present
       const cleanText = text.replace(/^\uFEFF/, '');
       
-      // Parse CSV into rows & fields safely handling RFC 4180 quotes
       const parsedRows: string[][] = [];
       let currentRow: string[] = [];
       let currentField = '';
@@ -259,14 +509,13 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
       }
 
       if (parsedRows.length === 0) {
-        setCsvToast({
+        setToastFeedback({
           type: 'error',
           message: 'CSV ဖိုင်တွင် ဒေတာ အချက်အလက် မရှိပါ။ (Uploaded CSV is empty)'
         });
         return;
       }
 
-      // Check if row 0 is header row
       const firstRowNorm = parsedRows[0].map(h => h.toLowerCase().replace(/[\s_\-]+/g, ''));
       const hasHeader = firstRowNorm.some(h =>
         h.includes('identifier') || h.includes('image') || h.includes('expect') || h.includes('target') || h.includes('value') || h.includes('code') || h === 'title' || h === 'id'
@@ -293,65 +542,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         dataRows = parsedRows.slice(1);
       }
 
-      // 2. Robust Normalized Matching Helper:
-      // Strip file extensions, trim spaces, strip leading zeros, convert to lowercase
-      const normalizeKey = (val: string): string => {
-        if (!val) return '';
-        const cleaned = String(val)
-          .replace(/\.(jpg|jpeg|png|webp|gif|bmp)$/i, '')
-          .trim()
-          .toLowerCase();
-        const noLeadingZeros = cleaned.replace(/^0+/, '');
-        return noLeadingZeros || cleaned;
-      };
-
-      const sanitizeValue = (raw: string, cat: string): string => {
-        const val = (raw || '').trim();
-
-        if (cat === 'tax_number') {
-          // Normalize full-width numbers (０-９) to half-width digits (0-9)
-          let tax = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
-          // Trim all inner whitespaces
-          tax = tax.replace(/\s+/g, '');
-          // If the imported value contains a leading "T" or "t" (e.g. "T4180001097758"), automatically STRIP the "T" so it becomes pure numeric digits ("4180001097758")
-          tax = tax.replace(/^T/i, '');
-          // Strip any accidental hyphens or delimiters
-          tax = tax.replace(/[-ー―]/g, '');
-          // DO NOT prepend "T" anymore.
-          return tax;
-        }
-
-        if (cat === 'phone_number') {
-          // Normalize full-width numbers (０-９) to half-width (0-9)
-          let phone = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
-          // Normalize full-width hyphens
-          phone = phone.replace(/[ー－―]/g, '-');
-          // Trim surrounding spaces, preserve hyphens
-          phone = phone.trim();
-          return phone;
-        }
-
-        if (cat === 'date_entry' || cat === 'date_number') {
-          // Normalize full-width numbers
-          let dateStr = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
-          // Normalize date delimiters (slashes/dashes/dots/kanji)
-          const dateParts = dateStr.split(/[/.\-年日月\s]+/).filter(Boolean);
-          if (dateParts.length >= 3 && dateParts[0].length === 4) {
-            const y = dateParts[0];
-            const m = dateParts[1].padStart(2, '0');
-            const d = dateParts[2].padStart(2, '0');
-            return `${y}${m}${d}`;
-          }
-          // If already digits or delimiter separated, strip delimiters
-          return dateStr.replace(/[/.\-年日月\s]/g, '');
-        }
-
-        return val;
-      };
-
       let updatedCount = 0;
       const unmatchedIdentifiers: string[] = [];
       const newMatchedMap: Record<string, string> = { ...matchedCsvMap };
+      const cacheUpdates: Record<string, { expected_value: string; issuer_or_note?: string }> = {};
+      const upsertDbRows: any[] = [];
 
       dataRows.forEach((row) => {
         const rawIdentifier = (row[idCol] || '').trim();
@@ -359,25 +554,44 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         const rawNote = noteCol !== -1 && row[noteCol] ? row[noteCol].trim() : '';
 
         if (!rawIdentifier) return;
-
         const normalizedRowKey = normalizeKey(rawIdentifier);
 
-        // Match CSV row to pool item strictly by comparing normalizeKey(row.Image_Identifier) === normalizeKey(item.title)
-        // DO NOT map by row index or array position. Match solely by key.
-        const matchedItem = sortedInvoices.find((inv) => {
-          const itemTitle = (inv as any).title || inv.companyName || inv.id || '';
+        const matchedItem = sortedPoolItems.find((inv) => {
+          const itemTitle = inv.title || getItemTitle(inv);
           return normalizeKey(itemTitle) === normalizedRowKey;
         });
 
         if (matchedItem) {
-          const sanitizedVal = sanitizeValue(rawExpectedVal, matchedItem.category || category);
-          onUpdateCode(matchedItem.id, sanitizedVal);
+          const cleanVal = cleanEnteredTarget(rawExpectedVal, category);
+          const noteVal = rawNote || matchedItem.issuer || matchedItem.companyName || '';
+
+          onUpdateCode(matchedItem.id, cleanVal);
           if (rawNote && onUpdateCompany) {
             onUpdateCompany(matchedItem.id, rawNote);
           }
+
           newMatchedMap[matchedItem.id] = rawIdentifier;
-          (matchedItem as any).matchedFromCsv = true;
-          (matchedItem as any).matchedIdentifier = rawIdentifier;
+          matchedItem.target = cleanVal;
+          matchedItem.expectedNumber = cleanVal;
+          matchedItem.issuer = noteVal;
+          matchedItem.companyName = noteVal;
+          matchedItem.isSynced = true;
+          matchedItem.matchedFromCsv = true;
+          matchedItem.matchedIdentifier = rawIdentifier;
+
+          const normKey = normalizeKey(matchedItem.title || getItemTitle(matchedItem));
+          cacheUpdates[normKey] = {
+            expected_value: cleanVal,
+            issuer_or_note: noteVal
+          };
+
+          upsertDbRows.push({
+            category: category,
+            image_identifier: normKey,
+            expected_value: cleanVal,
+            issuer_or_note: noteVal
+          });
+
           updatedCount++;
         } else {
           unmatchedIdentifiers.push(rawIdentifier);
@@ -386,23 +600,35 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
       setMatchedCsvMap(newMatchedMap);
 
-      // 4. State Updates & Feedback
-      if (unmatchedIdentifiers.length > 0) {
-        console.warn('[CSV Import] Active Pool တွင် မတွေ့ရှိသော ပုံအမည်များ (Unmatched Image Identifiers):', unmatchedIdentifiers);
+      // Persist bulk CSV updates to LocalStorage cache
+      const cacheKey = `training_labels_cache_${category}`;
+      try {
+        const rawCache = localStorage.getItem(cacheKey);
+        const existingCache = rawCache ? JSON.parse(rawCache) : {};
+        localStorage.setItem(cacheKey, JSON.stringify({ ...existingCache, ...cacheUpdates }));
+      } catch (e) {
+        console.warn('Failed to save CSV updates to localStorage cache:', e);
       }
 
-      const totalImages = sortedInvoices.length;
+      // Persist bulk CSV updates to Supabase
+      if (upsertDbRows.length > 0) {
+        try {
+          await supabase.from('training_labels').upsert(upsertDbRows, { onConflict: 'category,image_identifier' });
+        } catch (err) {
+          console.warn('Failed to upsert CSV labels to Supabase:', err);
+        }
+      }
 
-      // Burmese Toast Notification:
-      // "အောင်မြင်စွာ ချိတ်ဆက်ပြီးပါပြီ။ စုစုပေါင်း [Matched]/[Total] ပုံအတွက် သတ်မှတ်တန်ဖိုးများကို တိကျစွာ သတ်မှတ်ပြီးပါပြီ။"
+      const totalImages = sortedPoolItems.length;
+
       if (updatedCount > 0) {
-        setCsvToast({
+        setToastFeedback({
           type: 'success',
           message: `အောင်မြင်စွာ ချိတ်ဆက်ပြီးပါပြီ။ စုစုပေါင်း ${updatedCount}/${totalImages} ပုံအတွက် သတ်မှတ်တန်ဖိုးများကို တိကျစွာ သတ်မှတ်ပြီးပါပြီ။`,
           unmatched: unmatchedIdentifiers.length > 0 ? unmatchedIdentifiers : undefined
         });
       } else {
-        setCsvToast({
+        setToastFeedback({
           type: 'error',
           message: `CSV ဖိုင်မှ ပုံအမည်များနှင့် Active Pool ရှိ ပုံများ ကိုက်ညီမှု မရှိပါ။ (${unmatchedIdentifiers.length} ခု မတွေ့ရှိပါ)`,
           unmatched: unmatchedIdentifiers
@@ -410,7 +636,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
       }
     } catch (err: any) {
       console.error('[CSV Import Error]', err);
-      setCsvToast({
+      setToastFeedback({
         type: 'error',
         message: `CSV ဖတ်ရှုရာတွင် ချို့ယွင်းချက် ဖြစ်ပေါ်ပါသည်: ${err?.message || 'Invalid CSV format'}`
       });
@@ -511,7 +737,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         </div>
       </div>
 
-      {/* 4 Guidelines Cards (Collapsible) */}
+      {/* Guidelines Cards (Collapsible) */}
       {showRules && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 p-4 bg-slate-50/90 rounded-2xl border border-slate-200 shadow-2xs transition-all duration-200 animate-fade-in">
           <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
@@ -549,6 +775,48 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               {config.slaTarget}
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Global Toast Feedback Notification */}
+      {toastFeedback && (
+        <div 
+          className={`p-3 rounded-xl text-xs flex items-start justify-between gap-2 border shadow-2xs transition-all animate-fade-in ${
+            toastFeedback.type === 'success' 
+              ? 'bg-emerald-50 border-emerald-300 text-emerald-900' 
+              : toastFeedback.type === 'warning'
+              ? 'bg-amber-50 border-amber-300 text-amber-900'
+              : 'bg-rose-50 border-rose-300 text-rose-900'
+          }`}
+          role="alert"
+        >
+          <div className="flex items-start gap-2">
+            {toastFeedback.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+            ) : (
+              <AlertCircle className={`w-4 h-4 shrink-0 mt-0.5 ${toastFeedback.type === 'warning' ? 'text-amber-600' : 'text-rose-600'}`} />
+            )}
+            <div className="space-y-1">
+              <p className="font-semibold text-xs leading-relaxed">{toastFeedback.message}</p>
+              {toastFeedback.unmatched && toastFeedback.unmatched.length > 0 && (
+                <p className="text-[11px] opacity-90 font-mono leading-tight">
+                  သတိပေးချက်: Active Pool တွင် မတွေ့ရှိသော ပုံအမည်များ ({toastFeedback.unmatched.length} ခု):{' '}
+                  <span className="font-bold">
+                    {toastFeedback.unmatched.slice(0, 4).join(', ')}
+                    {toastFeedback.unmatched.length > 4 ? ` (+${toastFeedback.unmatched.length - 4} ခု)` : ''}
+                  </span>
+                </p>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setToastFeedback(null)}
+            className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer transition shrink-0"
+            aria-label="Dismiss notification"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
@@ -646,11 +914,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
           <div className="space-y-2 pt-3 border-t border-slate-200">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="text-[10px] uppercase font-bold tracking-widest text-slate-500 flex items-center gap-1">
-                <FileImage className="w-3.5 h-3.5 text-indigo-600" /> Active Pool Images ({invoices.length})
+                <FileImage className="w-3.5 h-3.5 text-indigo-600" /> Active Pool Images ({sortedPoolItems.length})
               </span>
               
               <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                {/* 1. Two-Way Standard CSV Label Template Management Buttons */}
+                {/* Two-Way Standard CSV Label Template Management Buttons */}
                 <button
                   type="button"
                   onClick={downloadCsvTemplate}
@@ -689,7 +957,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
                 {onRefreshPool && (
                   <button
-                    onClick={onRefreshPool}
+                    onClick={async () => {
+                      if (onRefreshPool) await onRefreshPool();
+                      loadPoolImages(invoices);
+                    }}
                     disabled={isRefreshingPool}
                     className="text-[9px] bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 disabled:opacity-50"
                     title="Force refresh custom invoice pool from Supabase"
@@ -704,9 +975,12 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 >
                   <Plus className="w-3 h-3" /> Populate Sample Image
                 </button>
-                {invoices.length > 0 && (
+                {sortedPoolItems.length > 0 && (
                   <button
-                    onClick={() => onClearPool(category)}
+                    onClick={() => {
+                      onClearPool(category);
+                      setPoolItems([]);
+                    }}
                     className="text-[9px] hover:bg-rose-50 border border-transparent text-rose-600 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider"
                   >
                     Clear Pool
@@ -715,49 +989,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               </div>
             </div>
 
-            {/* CSV Import Feedback & Burmese Toast Notification */}
-            {csvToast && (
-              <div 
-                className={`p-3 rounded-xl text-xs flex items-start justify-between gap-2 border shadow-2xs transition-all animate-fade-in ${
-                  csvToast.type === 'success' 
-                    ? 'bg-emerald-50 border-emerald-300 text-emerald-900' 
-                    : csvToast.type === 'warning'
-                    ? 'bg-amber-50 border-amber-300 text-amber-900'
-                    : 'bg-rose-50 border-rose-300 text-rose-900'
-                }`}
-                role="alert"
-              >
-                <div className="flex items-start gap-2">
-                  {csvToast.type === 'success' ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  ) : (
-                    <AlertCircle className={`w-4 h-4 shrink-0 mt-0.5 ${csvToast.type === 'warning' ? 'text-amber-600' : 'text-rose-600'}`} />
-                  )}
-                  <div className="space-y-1">
-                    <p className="font-semibold text-xs leading-relaxed">{csvToast.message}</p>
-                    {csvToast.unmatched && csvToast.unmatched.length > 0 && (
-                      <p className="text-[11px] opacity-90 font-mono leading-tight">
-                        သတိပေးချက်: Active Pool တွင် မတွေ့ရှိသော ပုံအမည်များ ({csvToast.unmatched.length} ခု):{' '}
-                        <span className="font-bold">
-                          {csvToast.unmatched.slice(0, 4).join(', ')}
-                          {csvToast.unmatched.length > 4 ? ` (+${csvToast.unmatched.length - 4} ခု)` : ''}
-                        </span>
-                      </p>
-                    )}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setCsvToast(null)}
-                  className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer transition shrink-0"
-                  aria-label="Dismiss notification"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            )}
-
-            {sortedInvoices.length === 0 ? (
+            {sortedPoolItems.length === 0 ? (
               <div className="border border-slate-200 rounded-xl p-6 text-center bg-white">
                 <p className="text-slate-400 text-xs font-semibold">No images in this category pool yet</p>
                 <p className="text-[10px] text-slate-400 mt-1.5 max-w-sm mx-auto leading-relaxed">
@@ -766,9 +998,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[220px] overflow-y-auto pr-1">
-                {sortedInvoices.map((inv, idx) => {
-                  const isMatchedFromCsv = !!(matchedCsvMap[inv.id] || (inv as any).matchedFromCsv);
-                  const displayTitle = matchedCsvMap[inv.id] || (inv as any).matchedIdentifier || getItemTitle(inv);
+                {sortedPoolItems.map((inv, idx) => {
+                  const isMatchedFromCsv = !!(matchedCsvMap[inv.id] || inv.matchedFromCsv);
+                  const displayTitle = matchedCsvMap[inv.id] || inv.matchedIdentifier || inv.title || getItemTitle(inv);
+                  const isItemSynced = inv.isSynced || lastSavedId === inv.id;
+
                   return (
                     <div key={inv.id} className="flex bg-white border border-slate-200 rounded-lg p-2 items-center justify-between group hover:border-indigo-300 transition relative">
                       <div className="flex items-center gap-2.5 overflow-hidden flex-1 mr-1">
@@ -778,13 +1012,17 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                           className="w-12 h-10 border border-slate-200 rounded bg-slate-50 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer relative group-hover:border-indigo-300 shadow-sm"
                           title="Click to zoom & review in modal"
                         >
-                          <img
-                            src={inv.customImageUrl}
-                            alt="Invoice thumbnail"
-                            loading="lazy"
-                            decoding="async"
-                            className="object-cover w-full h-full group-hover:scale-105 transition duration-150"
-                          />
+                          {inv.customImageUrl ? (
+                            <img
+                              src={inv.customImageUrl}
+                              alt="Invoice thumbnail"
+                              loading="lazy"
+                              decoding="async"
+                              className="object-cover w-full h-full group-hover:scale-105 transition duration-150"
+                            />
+                          ) : (
+                            <FileImage className="w-5 h-5 text-slate-400" />
+                          )}
                           <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition duration-150 flex items-center justify-center">
                             <Plus className="w-3.5 h-3.5 text-white" />
                           </div>
@@ -795,29 +1033,55 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                           <div className="flex items-center justify-between gap-1">
                             <input
                               type="text"
-                              value={inv.companyName}
+                              value={inv.issuer || inv.companyName || ''}
                               placeholder="Issuer Name"
-                              onChange={(e) => onUpdateCompany(inv.id, e.target.value)}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setPoolItems(prev => prev.map(p => p.id === inv.id ? { ...p, issuer: val, companyName: val } : p));
+                              }}
+                              onBlur={(e) => {
+                                handleSaveVerifyCode(inv.target || inv.expectedNumber || '', e.target.value, inv);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  (e.target as HTMLInputElement).blur();
+                                }
+                              }}
                               className="w-full text-[10px] font-bold text-slate-700 bg-transparent hover:bg-slate-50 focus:bg-white border-b border-transparent hover:border-slate-300 focus:border-indigo-500 rounded px-1 py-0.5 outline-none transition"
-                              title="Click to edit issuer name"
+                              title="Click to edit issuer name (auto-persists on blur/Enter)"
                             />
-                            {isMatchedFromCsv && (
-                              <span className="text-[9px] text-emerald-700 bg-emerald-50 border border-emerald-200 font-bold px-1.5 py-0.2 rounded shrink-0">
-                                CSV
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1 shrink-0">
+                              {isItemSynced && (
+                                <span className="text-[8px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-1 py-0.2 rounded font-bold" title="Synced to DB">
+                                  ☁️
+                                </span>
+                              )}
+                              {isMatchedFromCsv && (
+                                <span className="text-[9px] text-emerald-700 bg-emerald-50 border border-emerald-200 font-bold px-1.5 py-0.2 rounded shrink-0">
+                                  CSV
+                                </span>
+                              )}
+                            </div>
                           </div>
                           <div className="flex items-center gap-1 pl-1">
                             <span className="text-[9px] text-indigo-600 font-mono font-bold shrink-0">Target:</span>
                             <input
                               type="text"
-                              value={category === 'tax_number' ? (inv.expectedNumber || '').replace(/^T/i, '') : inv.expectedNumber}
+                              value={category === 'tax_number' ? (inv.target || inv.expectedNumber || '').replace(/^T/i, '') : (inv.target || inv.expectedNumber || '')}
                               onChange={(e) => {
                                 const val = category === 'tax_number' ? e.target.value.replace(/^T/i, '') : e.target.value;
-                                onUpdateCode(inv.id, val);
+                                setPoolItems(prev => prev.map(p => p.id === inv.id ? { ...p, target: val, expectedNumber: val } : p));
+                              }}
+                              onBlur={(e) => {
+                                handleSaveVerifyCode(e.target.value, inv.issuer || inv.companyName || '', inv);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  (e.target as HTMLInputElement).blur();
+                                }
                               }}
                               className="w-full text-[10px] font-mono text-indigo-700 bg-transparent hover:bg-slate-50 focus:bg-white border-b border-transparent hover:border-slate-300 focus:border-indigo-500 rounded px-1 py-0.5 outline-none font-bold transition tracking-wider uppercase"
-                              title="Click to edit expected transcribed number"
+                              title="Click to edit expected transcribed number (auto-persists on blur/Enter)"
                             />
                           </div>
                         </div>
@@ -834,7 +1098,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                           <Edit className="w-3.5 h-3.5" />
                         </button>
                         <button
-                          onClick={() => onDeleteInvoice(inv.id)}
+                          onClick={() => {
+                            onDeleteInvoice(inv.id);
+                            setPoolItems(prev => prev.filter(p => p.id !== inv.id));
+                          }}
                           aria-label={`Remove invoice ${inv.companyName || inv.id} from pool`}
                           className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer transition shrink-0"
                           title="Remove image from sandbox"
@@ -852,7 +1119,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
       ) : (
         /* Trainee View: Status Banner and Collapsible Verified Catalog */
         <div className="space-y-3">
-          {/* Trainee Verified Status Banner with Compact Toggle */}
+          {/* Trainee Verified Status Banner */}
           <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white px-4 py-3 rounded-xl border border-indigo-500/30 shadow-sm flex items-center justify-between flex-wrap gap-2.5">
             <div className="flex items-center gap-3">
               <div className="p-1.5 bg-emerald-500/20 text-emerald-400 rounded-lg border border-emerald-500/30 shrink-0">
@@ -860,7 +1127,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               </div>
               <div>
                 <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-200">
-                  Official Training Queue Prepared ({invoices.length} Invoices Available)
+                  Official Training Queue Prepared ({sortedPoolItems.length} Invoices Available)
                 </h3>
                 <p className="text-[11px] text-slate-300 font-sans">
                   Administrator verified catalog. Launch an SLA tier below to test your transcription speed.
@@ -875,16 +1142,16 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               aria-expanded={showPoolCatalog}
             >
               <FileImage className="w-3.5 h-3.5 text-indigo-400" />
-              <span>{showPoolCatalog ? '✕ Hide Catalog' : `👁️ View Pool Images (${invoices.length})`}</span>
+              <span>{showPoolCatalog ? '✕ Hide Catalog' : `👁️ View Pool Images (${sortedPoolItems.length})`}</span>
             </button>
           </div>
 
-          {/* Read-Only Invoice Catalog Pool for Trainee (Collapsible Accordion) */}
+          {/* Read-Only Invoice Catalog Pool for Trainee */}
           {showPoolCatalog && (
             <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 shadow-2xs space-y-2.5 animate-fade-in">
               <div className="flex items-center justify-between border-b border-slate-200 pb-2 flex-wrap gap-2">
                 <span className="text-[10px] uppercase font-bold tracking-widest text-slate-600 flex items-center gap-1.5">
-                  <FileImage className="w-3.5 h-3.5 text-indigo-600" /> Verified Pool Images ({invoices.length})
+                  <FileImage className="w-3.5 h-3.5 text-indigo-600" /> Verified Pool Images ({sortedPoolItems.length})
                 </span>
                 <div className="flex items-center gap-2">
                   <button
@@ -902,7 +1169,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 </div>
               </div>
 
-              {sortedInvoices.length === 0 ? (
+              {sortedPoolItems.length === 0 ? (
                 <div className="border border-slate-200 rounded-xl p-4 text-center bg-white">
                   <p className="text-slate-400 text-xs font-semibold">No images prepared in this category yet</p>
                   <p className="text-[11px] text-slate-400 mt-1 max-w-sm mx-auto">
@@ -911,9 +1178,9 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[140px] overflow-y-auto pr-1">
-                  {sortedInvoices.map((inv, idx) => {
-                    const isMatchedFromCsv = !!(matchedCsvMap[inv.id] || (inv as any).matchedFromCsv);
-                    const displayTitle = matchedCsvMap[inv.id] || (inv as any).matchedIdentifier || getItemTitle(inv);
+                  {sortedPoolItems.map((inv, idx) => {
+                    const isMatchedFromCsv = !!(matchedCsvMap[inv.id] || inv.matchedFromCsv);
+                    const displayTitle = matchedCsvMap[inv.id] || inv.matchedIdentifier || inv.title || getItemTitle(inv);
                     return (
                       <div key={inv.id} className="flex bg-white border border-slate-200 rounded-lg p-1.5 items-center justify-between group hover:border-indigo-300 transition shadow-2xs">
                         <div className="flex items-center gap-2 overflow-hidden flex-1 mr-1">
@@ -923,13 +1190,17 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                             className="w-10 h-8 border border-slate-200 rounded bg-slate-50 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer relative group-hover:border-indigo-300 shadow-sm"
                             title="Click to preview receipt image"
                           >
-                            <img
-                              src={inv.customImageUrl}
-                              alt="Invoice thumbnail"
-                              loading="lazy"
-                              decoding="async"
-                              className="object-cover w-full h-full group-hover:scale-105 transition duration-150"
-                            />
+                            {inv.customImageUrl ? (
+                              <img
+                                src={inv.customImageUrl}
+                                alt="Invoice thumbnail"
+                                loading="lazy"
+                                decoding="async"
+                                className="object-cover w-full h-full group-hover:scale-105 transition duration-150"
+                              />
+                            ) : (
+                              <FileImage className="w-4 h-4 text-slate-400" />
+                            )}
                             <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition duration-150 flex items-center justify-center">
                               <Plus className="w-3 h-3 text-white" />
                             </div>
@@ -939,7 +1210,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                           <div className="flex-1 min-w-0 space-y-0.5">
                             <div className="flex items-center gap-1">
                               <p className="text-[10px] font-bold text-slate-800 truncate" title={displayTitle}>
-                                {inv.companyName || displayTitle || 'Standard Receipt'}
+                                {inv.issuer || inv.companyName || displayTitle || 'Standard Receipt'}
                               </p>
                               {isMatchedFromCsv && (
                                 <span className="text-[8px] text-emerald-700 bg-emerald-50 border border-emerald-200 font-bold px-1 rounded shrink-0">
@@ -950,7 +1221,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                             <div className="flex items-center gap-1 text-[9px] font-mono">
                               <span className="text-slate-400 font-bold">Target:</span>
                               <span className="font-bold text-indigo-700 uppercase tracking-wider bg-indigo-50/70 px-1 py-0.2 rounded border border-indigo-100 truncate">
-                                {category === 'tax_number' ? (inv.expectedNumber || '').replace(/^T/i, '') : inv.expectedNumber}
+                                {category === 'tax_number' ? (inv.target || inv.expectedNumber || '').replace(/^T/i, '') : (inv.target || inv.expectedNumber || '')}
                               </span>
                             </div>
                           </div>
@@ -977,7 +1248,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
       {/* 3. Interactive Mode Selector Grid (Launchpad) */}
       <div className="border-t border-slate-150 pt-5 space-y-4">
-        {invoices.length === 0 ? (
+        {sortedPoolItems.length === 0 ? (
           <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-2.5 text-amber-800 text-xs font-medium font-sans">
             <div className="flex items-center gap-2">
               <span className="text-base shrink-0">⚠️</span>
@@ -998,7 +1269,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               <Zap className="w-3.5 h-3.5 text-indigo-600" /> Assessment Launchpad:
             </span>
             <span className="text-[10px] text-indigo-600 font-bold font-sans">
-              {invoices.length} active image{invoices.length !== 1 ? 's' : ''} in catalog
+              {sortedPoolItems.length} active image{sortedPoolItems.length !== 1 ? 's' : ''} in catalog
             </span>
           </div>
         )}
@@ -1006,27 +1277,27 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4" id={`launch-grid-${category}`}>
           {/* Card 1 (Hard 180): Extreme Endurance */}
           <div className={`border rounded-2xl p-4 flex flex-col justify-between transition-all duration-200 group relative ${
-            invoices.length > 0
+            sortedPoolItems.length > 0
               ? 'bg-slate-50/90 hover:bg-slate-50 border-purple-200 hover:border-purple-300 hover:shadow-md hover:shadow-purple-500/5'
               : 'bg-slate-50/40 border-slate-200 opacity-75'
           }`}>
             <div className="space-y-2.5">
               <div className="flex items-center justify-between">
                 <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${
-                  invoices.length > 0 ? 'bg-purple-100 text-purple-700 border-purple-200' : 'bg-slate-100 text-slate-400 border-slate-200'
+                  sortedPoolItems.length > 0 ? 'bg-purple-100 text-purple-700 border-purple-200' : 'bg-slate-100 text-slate-400 border-slate-200'
                 }`}>
                   Master Tier SLA
                 </span>
                 <span className="text-[11px] font-mono font-extrabold text-purple-600">180 Invoices</span>
               </div>
               <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5 font-sans">
-                <Zap className={`w-4 h-4 shrink-0 ${invoices.length > 0 ? 'text-purple-600 fill-purple-600' : 'text-slate-400'}`} />
+                <Zap className={`w-4 h-4 shrink-0 ${sortedPoolItems.length > 0 ? 'text-purple-600 fill-purple-600' : 'text-slate-400'}`} />
                 <span>⚡ Extreme Endurance (180 Invoices)</span>
               </h4>
               <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                Full endurance drill (Smart 180-loop queue from {invoices.length} loaded catalog images)
+                Full endurance drill (Smart 180-loop queue from {sortedPoolItems.length} loaded catalog images)
               </p>
-              {invoices.length > 0 && (
+              {sortedPoolItems.length > 0 && (
                 <div className="text-[10px] text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200 font-medium inline-flex items-center gap-1">
                   <span>♻️ Smart Pool Auto-Shuffling Active (180 Queue)</span>
                 </div>
@@ -1035,9 +1306,9 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
             <div className="mt-4 pt-3 border-t border-purple-100/80">
               <button
                 onClick={() => onStartTest(category, 'hard_180')}
-                disabled={invoices.length === 0}
+                disabled={sortedPoolItems.length === 0}
                 className={`w-full py-2.5 px-3 font-bold rounded-xl transition flex items-center justify-center space-x-1.5 text-xs uppercase tracking-wider font-sans ${
-                  invoices.length > 0
+                  sortedPoolItems.length > 0
                     ? 'bg-purple-700 hover:bg-purple-600 active:bg-purple-800 text-white cursor-pointer shadow-sm hover:shadow-purple-500/20'
                     : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-200 opacity-70 shadow-none'
                 }`}
@@ -1051,11 +1322,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
           {/* Card 2 (Normal 90): Official Assessment */}
           <div className={`border-2 rounded-2xl p-4 flex flex-col justify-between transition-all duration-200 group relative ${
-            invoices.length > 0
+            sortedPoolItems.length > 0
               ? 'bg-gradient-to-b from-blue-50/70 via-white to-blue-50/40 border-blue-500/60 ring-4 ring-blue-500/10 shadow-sm hover:shadow-lg hover:shadow-blue-500/10'
               : 'bg-slate-50/40 border-slate-200 opacity-75 ring-0'
           }`}>
-            {invoices.length > 0 && (
+            {sortedPoolItems.length > 0 && (
               <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[9px] font-extrabold uppercase tracking-widest px-2.5 py-0.5 rounded-full shadow-sm">
                 ★ Standard Qualification
               </div>
@@ -1063,20 +1334,20 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
             <div className="space-y-2.5 mt-1">
               <div className="flex items-center justify-between">
                 <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${
-                  invoices.length > 0 ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-slate-100 text-slate-400 border-slate-200'
+                  sortedPoolItems.length > 0 ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-slate-100 text-slate-400 border-slate-200'
                 }`}>
                   ★ Official SLA Standard
                 </span>
                 <span className="text-[11px] font-mono font-extrabold text-blue-600">90 Invoices</span>
               </div>
               <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5 font-sans">
-                <Trophy className={`w-4 h-4 shrink-0 ${invoices.length > 0 ? 'text-blue-600 fill-blue-600' : 'text-slate-400'}`} />
+                <Trophy className={`w-4 h-4 shrink-0 ${sortedPoolItems.length > 0 ? 'text-blue-600 fill-blue-600' : 'text-slate-400'}`} />
                 <span>★ Official Assessment (90 Invoices)</span>
               </h4>
               <p className="text-xs text-slate-500 leading-relaxed font-sans">
                 Standard qualification benchmark (90 Invoices Queue)
               </p>
-              {invoices.length > 0 && invoices.length < 90 && (
+              {sortedPoolItems.length > 0 && sortedPoolItems.length < 90 && (
                 <div className="text-[10px] text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200 font-medium inline-flex items-center gap-1">
                   <span>♻️ Smart Pool Auto-Shuffling Active (90 Queue)</span>
                 </div>
@@ -1085,9 +1356,9 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
             <div className="mt-4 pt-3 border-t border-blue-100">
               <button
                 onClick={() => onStartTest(category, 'normal_90')}
-                disabled={invoices.length === 0}
+                disabled={sortedPoolItems.length === 0}
                 className={`w-full py-2.5 px-3 font-bold rounded-xl transition flex items-center justify-center space-x-1.5 text-xs uppercase tracking-wider font-sans ${
-                  invoices.length > 0
+                  sortedPoolItems.length > 0
                     ? 'bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white cursor-pointer shadow-sm hover:shadow-blue-500/20'
                     : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-200 opacity-70 shadow-none'
                 }`}
@@ -1101,27 +1372,27 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
           {/* Card 3 (Easy 20): Practice Benchmark */}
           <div className={`border rounded-2xl p-4 flex flex-col justify-between transition-all duration-200 group relative ${
-            invoices.length > 0
+            sortedPoolItems.length > 0
               ? 'bg-slate-50/90 hover:bg-slate-50 border-emerald-200 hover:border-emerald-300 hover:shadow-md hover:shadow-emerald-500/5'
               : 'bg-slate-50/40 border-slate-200 opacity-75'
           }`}>
             <div className="space-y-2.5">
               <div className="flex items-center justify-between">
                 <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${
-                  invoices.length > 0 ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-400 border-slate-200'
+                  sortedPoolItems.length > 0 ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-400 border-slate-200'
                 }`}>
                   Warm-up Drill
                 </span>
                 <span className="text-[11px] font-mono font-extrabold text-emerald-600">20 Invoices</span>
               </div>
               <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5 font-sans">
-                <Play className={`w-4 h-4 shrink-0 ${invoices.length > 0 ? 'text-emerald-600 fill-emerald-600' : 'text-slate-400'}`} />
+                <Play className={`w-4 h-4 shrink-0 ${sortedPoolItems.length > 0 ? 'text-emerald-600 fill-emerald-600' : 'text-slate-400'}`} />
                 <span>🎯 Practice Benchmark (20 Invoices)</span>
               </h4>
               <p className="text-xs text-slate-500 leading-relaxed font-sans">
                 Rapid practice speed test (20 Invoices Quick Run)
               </p>
-              {invoices.length > 0 && invoices.length < 20 && (
+              {sortedPoolItems.length > 0 && sortedPoolItems.length < 20 && (
                 <div className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 font-medium inline-flex items-center gap-1">
                   <span>♻️ Smart Pool Auto-Shuffling Active (20 Queue)</span>
                 </div>
@@ -1130,9 +1401,9 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
             <div className="mt-4 pt-3 border-t border-emerald-100/80">
               <button
                 onClick={() => onStartTest(category, 'easy_20')}
-                disabled={invoices.length === 0}
+                disabled={sortedPoolItems.length === 0}
                 className={`w-full py-2.5 px-3 font-bold rounded-xl transition flex items-center justify-center space-x-1.5 text-xs uppercase tracking-wider font-sans ${
-                  invoices.length > 0
+                  sortedPoolItems.length > 0
                     ? 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white cursor-pointer shadow-sm hover:shadow-emerald-500/20'
                     : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-200 opacity-70 shadow-none'
                 }`}
@@ -1146,21 +1417,31 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         </div>
       </div>
 
-      {/* 3. Visual Confirmation in Reviewer Modal */}
-      {reviewerModalIndex !== null && sortedInvoices[reviewerModalIndex] && (() => {
-        const currentInv = sortedInvoices[reviewerModalIndex];
-        const isMatchedFromCsv = !!(matchedCsvMap[currentInv.id] || (currentInv as any).matchedFromCsv);
-        const displayIdentifier = matchedCsvMap[currentInv.id] || (currentInv as any).matchedIdentifier || getItemTitle(currentInv);
+      {/* 3. Reviewer Modal */}
+      {reviewerModalIndex !== null && sortedPoolItems[reviewerModalIndex] && (() => {
+        const currentInv = sortedPoolItems[reviewerModalIndex];
+        const isMatchedFromCsv = !!(matchedCsvMap[currentInv.id] || currentInv.matchedFromCsv);
+        const displayIdentifier = matchedCsvMap[currentInv.id] || currentInv.matchedIdentifier || currentInv.title || getItemTitle(currentInv);
+        const isItemSynced = currentInv.isSynced || lastSavedId === currentInv.id;
 
-        const handleNextReview = () => {
-          if (reviewerModalIndex < sortedInvoices.length - 1) {
+        const handleNextReview = async () => {
+          // Auto-save if inputs differ from active record
+          const cleanTarget = cleanEnteredTarget(modalTarget, category);
+          if (cleanTarget !== currentInv.target || modalIssuer.trim() !== currentInv.issuer) {
+            await handleSaveVerifyCode(modalTarget, modalIssuer, currentInv);
+          }
+          if (reviewerModalIndex < sortedPoolItems.length - 1) {
             setReviewerModalIndex(reviewerModalIndex + 1);
           } else {
             setReviewerModalIndex(null);
           }
         };
 
-        const handlePrevReview = () => {
+        const handlePrevReview = async () => {
+          const cleanTarget = cleanEnteredTarget(modalTarget, category);
+          if (cleanTarget !== currentInv.target || modalIssuer.trim() !== currentInv.issuer) {
+            await handleSaveVerifyCode(modalTarget, modalIssuer, currentInv);
+          }
           if (reviewerModalIndex > 0) {
             setReviewerModalIndex(reviewerModalIndex - 1);
           }
@@ -1179,7 +1460,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               {/* Left Side: Receipt Image Preview */}
               <div className="bg-slate-950 p-5 sm:p-6 flex flex-col justify-between items-center md:w-[48%] border-r border-slate-800 min-h-[280px] sm:min-h-[340px] relative">
                 <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-slate-800 text-slate-300 font-mono text-[10px] font-bold uppercase px-2 py-0.5 rounded tracking-wide">
-                  <span>Image {reviewerModalIndex + 1} of {sortedInvoices.length}</span>
+                  <span>Image {reviewerModalIndex + 1} of {sortedPoolItems.length}</span>
                 </div>
                 
                 <button 
@@ -1206,7 +1487,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 </div>
 
                 <div className="w-full flex items-center justify-between text-[10px] text-slate-400 font-mono px-1">
-                  <span className="truncate max-w-[180px]">{getItemTitle(currentInv)}</span>
+                  <span className="truncate max-w-[180px]">{currentInv.title || getItemTitle(currentInv)}</span>
                   <span className="text-indigo-400 font-bold uppercase tracking-wider">{category}</span>
                 </div>
               </div>
@@ -1216,7 +1497,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 <div className="space-y-4">
                   <div>
                     <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest block mb-1">
-                      🏷️ Batch Reviewer
+                      🏷️ Batch Reviewer & Labeling Assistant
                     </span>
                     <h3 id="reviewer-modal-title" className="text-lg font-bold text-slate-900 font-sans tracking-tight leading-none">
                       Verify & Set Target Values
@@ -1230,46 +1511,59 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                     </p>
                   </div>
 
-                  {/* Visual Confirmation in Reviewer Modal */}
+                  {/* 3. Natural Sort & Identifier Display:
+                      Clearly display: "Image File: [item.title] | Matched Key: [normalizeKey(item.title)]"
+                      and show a small green badge "☁️ Synced to DB" when saved. */}
                   <div className="bg-indigo-50/80 border border-indigo-200/80 rounded-xl p-3 flex items-center justify-between gap-2 shadow-2xs">
-                    <div className="overflow-hidden">
+                    <div className="overflow-hidden min-w-0">
                       <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 block">
                         Matched Image Identifier
                       </span>
-                      <p className="text-sm font-bold font-mono text-indigo-950 truncate mt-0.5">
-                        Image ID: {displayIdentifier} {isMatchedFromCsv ? '(Matched from CSV)' : ''}
+                      <p className="text-xs font-bold font-mono text-indigo-950 truncate mt-0.5">
+                        Image File: {currentInv.title || getItemTitle(currentInv)} | Matched Key: {normalizeKey(currentInv.title || getItemTitle(currentInv))}
                       </p>
                     </div>
-                    {isMatchedFromCsv ? (
-                      <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                        Matched from CSV
-                      </span>
-                    ) : (
-                      <span className="text-[10px] bg-slate-100 text-slate-600 border border-slate-200 font-bold px-2 py-0.5 rounded-full shrink-0">
-                        Standard Item
-                      </span>
-                    )}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {isItemSynced && (
+                        <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0 animate-fade-in shadow-2xs">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                          ☁️ Synced to DB
+                        </span>
+                      )}
+                      {isMatchedFromCsv && (
+                        <span className="text-[10px] bg-blue-100 text-blue-800 border border-blue-200 font-bold px-2 py-0.5 rounded-full shrink-0">
+                          CSV
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Input Fields */}
                   <div className="space-y-3">
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-1">
-                        Expected Transcribed Value <span className="text-rose-500">*</span>
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-widest">
+                          Expected Transcribed Value <span className="text-rose-500">*</span>
+                        </label>
+                        {isItemSynced && (
+                          <span className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
+                            <Check className="w-2.5 h-2.5" /> Persisted
+                          </span>
+                        )}
+                      </div>
                       <input
                         type="text"
                         placeholder={config[category]?.codePlaceholder || '1234567890123'}
-                        value={category === 'tax_number' ? (currentInv.expectedNumber || '').replace(/^T/i, '') : (currentInv.expectedNumber || '')}
+                        value={modalTarget}
                         autoFocus
                         onChange={(e) => {
                           const val = category === 'tax_number' ? e.target.value.replace(/^T/i, '') : e.target.value;
-                          onUpdateCode(currentInv.id, val);
+                          setModalTarget(val);
                         }}
-                        onKeyDown={(e) => {
+                        onKeyDown={async (e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
+                            await handleSaveVerifyCode(modalTarget, modalIssuer, currentInv);
                             handleNextReview();
                           }
                         }}
@@ -1287,8 +1581,15 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                       <input
                         type="text"
                         placeholder="e.g. Aeon Retail Co., Ltd."
-                        value={currentInv.companyName || ''}
-                        onChange={(e) => onUpdateCompany(currentInv.id, e.target.value)}
+                        value={modalIssuer}
+                        onChange={(e) => setModalIssuer(e.target.value)}
+                        onKeyDown={async (e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            await handleSaveVerifyCode(modalTarget, modalIssuer, currentInv);
+                            handleNextReview();
+                          }
+                        }}
                         className="w-full p-2.5 bg-slate-50 border border-slate-300 text-xs text-slate-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500"
                       />
                     </div>
@@ -1309,6 +1610,17 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
+                      disabled={isSavingCode}
+                      onClick={() => handleSaveVerifyCode(modalTarget, modalIssuer, currentInv)}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                      title="Save verified transcription target code to Database & Cache"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>{isSavingCode ? 'Saving...' : 'Save'}</span>
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={() => setReviewerModalIndex(null)}
                       className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition cursor-pointer"
                     >
@@ -1319,7 +1631,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                       onClick={handleNextReview}
                       className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-xs"
                     >
-                      {reviewerModalIndex < sortedInvoices.length - 1 ? (
+                      {reviewerModalIndex < sortedPoolItems.length - 1 ? (
                         <>Next <ChevronRight className="w-3.5 h-3.5" /></>
                       ) : (
                         'Finish Review'
