@@ -4,6 +4,7 @@
  */
 
 import React, { useRef, useState, useEffect, useMemo } from 'react';
+import JSZip from 'jszip';
 import {
   FileImage,
   FileText,
@@ -24,7 +25,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Save,
-  Check
+  Check,
+  Archive,
+  FileArchive
 } from 'lucide-react';
 import { GeneratedInvoiceData, TrainingCategory, TrainingMode } from '../types';
 import { supabase } from '../supabase';
@@ -59,6 +62,7 @@ interface CategorySandboxProps {
   isAdmin?: boolean;
   onRefreshPool?: () => Promise<void>;
   isRefreshingPool?: boolean;
+  onCategoryChange?: (category: TrainingCategory) => void;
 }
 
 // 1. Helper to extract clean image title/identifier consistently
@@ -81,9 +85,11 @@ export const normalizeKey = (val: string): string => {
 };
 
 // 3. Category-Aware Target Cleaning Helper:
-// For tax_number: converts full-width numbers, strips leading "T"/"t", ensures pure numeric digits only
+// - tax_number: converts full-width numbers, strips leading "T"/"t", ensures pure numeric digits only
+// - phone_number: converts full-width numbers, strictly preserves leading zeros as text
+// - date_number: converts full-width numbers, normalizes to 8 digits YYYYMMDD
 export const cleanEnteredTarget = (raw: string, cat: TrainingCategory): string => {
-  const val = (raw || '').trim();
+  const val = String(raw || '').trim();
   if (cat === 'tax_number') {
     let tax = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
     tax = tax.replace(/^T/i, '');
@@ -103,9 +109,24 @@ export const cleanEnteredTarget = (raw: string, cat: TrainingCategory): string =
   }
   if (cat === 'phone_number') {
     let phone = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
-    return phone.replace(/[ー－―]/g, '-').replace(/\s+/g, '').trim();
+    // Strictly preserve leading zeros as text; normalize hyphens and strip whitespace
+    return phone.replace(/[ー－―]/g, '-').replace(/\s+/g, '');
   }
   return val;
+};
+
+// Friendly Category Label for Toasts
+export const getCategoryLabel = (cat: TrainingCategory): string => {
+  switch (cat) {
+    case 'tax_number':
+      return 'Tax Number';
+    case 'date_number':
+      return 'Date Number';
+    case 'phone_number':
+      return 'Phone Number';
+    default:
+      return 'Category';
+  }
 };
 
 export const CategorySandbox: React.FC<CategorySandboxProps> = ({
@@ -125,10 +146,12 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   setCustomCompanyName,
   isAdmin = false,
   onRefreshPool,
-  isRefreshingPool = false
+  isRefreshingPool = false,
+  onCategoryChange
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvFileInputRef = useRef<HTMLInputElement>(null);
+  const zipFileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [showRules, setShowRules] = useState<boolean>(false);
@@ -139,6 +162,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   // Active state 'poolItems' with complete hydration and persistence metadata
   const [poolItems, setPoolItems] = useState<PoolItem[]>([]);
   const [lastSavedId, setLastSavedId] = useState<string | null>(null);
+
+  // ZIP export & restore status
+  const [isExportingZip, setIsExportingZip] = useState<boolean>(false);
+  const [isRestoringZip, setIsRestoringZip] = useState<boolean>(false);
 
   // Modal temporary edit state
   const [modalTarget, setModalTarget] = useState<string>('');
@@ -163,7 +190,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
     }
   }, [toastFeedback]);
 
-  // 3. Natural Sort:
+  // Natural Sort:
   // Maintain natural alphanumeric sort for all pool items so that item '2' comes before '10'
   const sortedPoolItems = useMemo(() => {
     return [...poolItems].sort((a, b) => {
@@ -174,12 +201,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   }, [poolItems]);
 
   /**
-   * 2. Auto-Hydrate Targets on Image Pool Load:
-   * - In 'loadPoolImages' (or whenever images are fetched from Supabase storage or set):
-   *   * Fetch saved targets from Supabase table 'training_labels' for the current category:
-   *     const { data: dbLabels } = await supabase.from('training_labels').select('*').eq('category', category);
-   *   * Create a lookup map: key = normalizeKey(row.image_identifier), value = row.expected_value.
-   *   * Map each pool item: if lookup map has the key, set item.target = value and item.issuer = row.issuer_or_note.
+   * Auto-Hydrate Targets on Image Pool Load:
+   * - In 'loadPoolImages':
+   *   * Fetch saved targets from Supabase table 'training_labels' for the current category.
+   *   * Create lookup map: key = normalizeKey(row.image_identifier), value = row.expected_value.
+   *   * Map each pool item: set item.target = value and item.issuer = row.issuer_or_note.
    *   * Fallback to LocalStorage cache if Supabase table has not yet loaded.
    */
   const loadPoolImages = async (sourceInvoices: (GeneratedInvoiceData & { customImageUrl?: string; title?: string })[]) => {
@@ -226,7 +252,6 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         .eq('category', category);
 
       if (!error && Array.isArray(dbLabels)) {
-        // Create lookup map: key = normalizeKey(row.image_identifier), value = row.expected_value
         const lookupMap = new Map<string, { expected_value: string; issuer_or_note?: string }>();
         const newCache: Record<string, { expected_value: string; issuer_or_note?: string }> = { ...localCache };
 
@@ -245,14 +270,14 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
           }
         });
 
-        // Update LocalStorage cache with the complete remote set
+        // Update LocalStorage cache with remote labels
         try {
           localStorage.setItem(cacheKey, JSON.stringify(newCache));
         } catch (e) {
           console.warn('[Auto-Hydrate] Failed to update localStorage mirror cache:', e);
         }
 
-        // Map each pool item: if lookup map has the key, set item.target = value and item.issuer = row.issuer_or_note
+        // Map each pool item: set item.target = value and item.issuer = row.issuer_or_note
         setPoolItems((prevItems) => {
           return prevItems.map((item) => {
             const itemKey = normalizeKey(item.title || getItemTitle(item));
@@ -292,18 +317,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   }, [category, invoices]);
 
   /**
-   * 1. Persistent Storage Integration on Save:
-   * In 'handleSaveVerifyCode':
-   *   * Clean the entered target (if category === 'tax_number', strip any leading "T"/"t" and ensure pure numeric digits).
-   *   * Update the active state 'poolItems'.
-   *   * Immediately persist to Supabase:
-   *     await supabase.from('training_labels').upsert({
-   *       category: category,
-   *       image_identifier: normalizeKey(reviewingItem.title),
-   *       expected_value: cleanTarget,
-   *       issuer_or_note: issuerNote.trim()
-   *     }, { onConflict: 'category,image_identifier' });
-   *   * Also update a LocalStorage mirror (`training_labels_cache_${category}`) so that targets persist even across full page reloads without network latency.
+   * Persistent Storage Integration on Save (handleSaveVerifyCode):
+   * - Clean the entered target.
+   * - Update active state 'poolItems'.
+   * - Immediately persist to Supabase 'training_labels' with onConflict.
+   * - Update LocalStorage mirror (`training_labels_cache_${category}`).
    */
   const handleSaveVerifyCode = async (
     targetInput: string,
@@ -315,7 +333,6 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
     setIsSavingCode(true);
 
-    // Clean entered target
     const cleanTarget = cleanEnteredTarget(targetInput, category);
     const issuerNote = (issuerInput || '').trim();
     const itemTitle = reviewingItem.title || getItemTitle(reviewingItem);
@@ -344,7 +361,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
       onUpdateCompany(reviewingItem.id, issuerNote);
     }
 
-    // Update LocalStorage mirror (`training_labels_cache_${category}`)
+    // Update LocalStorage mirror
     const cacheKey = `training_labels_cache_${category}`;
     try {
       const rawCache = localStorage.getItem(cacheKey);
@@ -391,7 +408,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
     }
   };
 
-  // Keep modal input fields in sync with the currently active reviewed item
+  // Sync reviewer modal inputs with current active item
   const activeReviewItem = reviewerModalIndex !== null && sortedPoolItems[reviewerModalIndex]
     ? sortedPoolItems[reviewerModalIndex]
     : null;
@@ -408,9 +425,297 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   }, [activeReviewItemId, category]);
 
   /**
+   * Helper to fetch Blob for ZIP creation
+   */
+  const fetchImageBlob = async (item: PoolItem): Promise<Blob | null> => {
+    const url = item.customImageUrl || (item as any).url || (item as any).imageUrl;
+    if (!url) return null;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.blob();
+    } catch (err) {
+      console.warn(`Could not fetch image blob for ${item.title}:`, err);
+      return null;
+    }
+  };
+
+  /**
+   * 3. Category-Aware ZIP Export Logic (handleExportCategoryZip):
+   * - Check if poolItems has images. If empty, show toast: "Backup ပြုလုပ်ရန် ပုံများ မရှိသေးပါ။"
+   * - Display Burmese progress toast: "[Category] အတွက် ZIP Backup ဖိုင် ထုတ်ယူနေပါသည်... ခေတ္တစောင့်ပါ။"
+   * - Build 'manifest.json' object:
+   *   * version: "1.0"
+   *   * category: activeCategory
+   *   * exportedAt: new Date().toISOString()
+   *   * totalImages: poolItems.length
+   *   * items: poolItems.map(item => ({ filename, image_identifier, expected_value, issuer }))
+   * - Add manifest.json and image files to root of ZIP.
+   * - Generate ZIP blob: await zip.generateAsync({ type: 'blob' }).
+   * - Trigger browser download: `backup_${activeCategory}_${new Date().toISOString().replace(/[:.]/g, '-')}.zip`.
+   * - Show success toast: "[Category] ၏ ပုံများနှင့် သတ်မှတ်တန်ဖိုးများ အားလုံးကို ZIP ဖိုင်အဖြစ် ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ။"
+   */
+  const handleExportCategoryZip = async () => {
+    if (sortedPoolItems.length === 0) {
+      setToastFeedback({
+        type: 'warning',
+        message: 'Backup ပြုလုပ်ရန် ပုံများ မရှိသေးပါ။'
+      });
+      return;
+    }
+
+    const catLabel = getCategoryLabel(category);
+    setIsExportingZip(true);
+    setToastFeedback({
+      type: 'success',
+      message: `${catLabel} အတွက် ZIP Backup ဖိုင် ထုတ်ယူနေပါသည်... ခေတ္တစောင့်ပါ။`
+    });
+
+    try {
+      const zip = new JSZip();
+
+      // Build manifest.json object
+      const manifest = {
+        version: '1.0',
+        category: category,
+        exportedAt: new Date().toISOString(),
+        totalImages: sortedPoolItems.length,
+        items: sortedPoolItems.map((item) => {
+          const rawTitle = item.title || getItemTitle(item);
+          // Ensure filename has standard extension if missing
+          const filename = /\.[a-z0-9]+$/i.test(rawTitle) ? rawTitle : `${rawTitle}.jpg`;
+          return {
+            filename,
+            image_identifier: normalizeKey(rawTitle),
+            expected_value: item.target ? String(item.target).trim() : '',
+            issuer: item.issuer || item.companyName || ''
+          };
+        })
+      };
+
+      zip.file('manifest.json', JSON.stringify(manifest, null, 2));
+
+      // Add each image file to the root of the ZIP
+      for (let i = 0; i < sortedPoolItems.length; i++) {
+        const item = sortedPoolItems[i];
+        const manifestItem = manifest.items[i];
+        const blob = await fetchImageBlob(item);
+        if (blob) {
+          zip.file(manifestItem.filename, blob);
+        }
+      }
+
+      // Generate ZIP blob
+      const zipBlob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 }
+      });
+
+      // Trigger browser download
+      const filenameDate = new Date().toISOString().replace(/[:.]/g, '-');
+      const downloadFilename = `backup_${category}_${filenameDate}.zip`;
+      const downloadUrl = URL.createObjectURL(zipBlob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = downloadFilename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(downloadUrl);
+
+      setToastFeedback({
+        type: 'success',
+        message: `${catLabel} ၏ ပုံများနှင့် သတ်မှတ်တန်ဖိုးများ အားလုံးကို ZIP ဖိုင်အဖြစ် ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ။`
+      });
+    } catch (err: any) {
+      console.error('ZIP Export Error:', err);
+      setToastFeedback({
+        type: 'error',
+        message: `ZIP ဖိုင် ထုတ်ယူရာတွင် ချို့ယွင်းချက် ဖြစ်ပေါ်ပါသည်: ${err?.message || 'Export error'}`
+      });
+    } finally {
+      setIsExportingZip(false);
+    }
+  };
+
+  /**
+   * 4. Category-Aware ZIP Restore Logic (handleRestoreCategoryZip):
+   * - Load ZIP via JSZip.loadAsync(file).
+   * - Extract and parse 'manifest.json'.
+   * - Validation: switch category if manifest.category !== activeCategory.
+   * - Extract image files matching filenames from manifest.items.
+   * - Generate local ObjectURLs and reconstruct poolItems.
+   * - Batch-upsert all labels into Supabase 'training_labels' table.
+   * - Update localStorage cache for the category.
+   * - Set state poolItems with natural alphanumeric sorting.
+   * - Show Burmese success toast: "ZIP ဖိုင်မှ [Category] ပုံပေါင်း [X] ပုံနှင့် သတ်မှတ်တန်ဖိုးများကို အောင်မြင်စွာ ပြန်လည် ထည့်သွင်းပြီးပါပြီ။"
+   */
+  const handleRestoreCategoryZip = async (file: File) => {
+    setIsRestoringZip(true);
+    try {
+      const zip = await JSZip.loadAsync(file);
+      const manifestFile = zip.file('manifest.json');
+      if (!manifestFile) {
+        setToastFeedback({
+          type: 'error',
+          message: "ZIP ဖိုင်အတွင်း 'manifest.json' ကို မတွေ့ရှိပါ။ (Invalid backup ZIP: missing manifest.json)"
+        });
+        return;
+      }
+
+      const manifestContent = await manifestFile.async('string');
+      const manifest = JSON.parse(manifestContent);
+
+      if (!manifest || !Array.isArray(manifest.items)) {
+        throw new Error("Invalid manifest.json: missing 'items' array");
+      }
+
+      // Category Validation & Normalization
+      let targetCategory: TrainingCategory = category;
+      if (manifest.category) {
+        const raw = String(manifest.category).toLowerCase().trim();
+        if (raw === 'date_number' || raw === 'date_entry') {
+          targetCategory = 'date_number';
+        } else if (raw === 'phone_number') {
+          targetCategory = 'phone_number';
+        } else if (raw === 'tax_number') {
+          targetCategory = 'tax_number';
+        }
+      }
+
+      // If manifest.category !== activeCategory, automatically switch category
+      if (targetCategory !== category && onCategoryChange) {
+        onCategoryChange(targetCategory);
+      }
+
+      const reconstructedItems: PoolItem[] = [];
+      const filesToUpload: File[] = [];
+      const dbUpsertRows: any[] = [];
+      const cacheUpdates: Record<string, { expected_value: string; issuer_or_note?: string }> = {};
+
+      for (let i = 0; i < manifest.items.length; i++) {
+        const m = manifest.items[i];
+        const filename = m.filename || `image_${i + 1}.jpg`;
+        const normalizedKey = m.image_identifier || normalizeKey(filename);
+        const cleanVal = cleanEnteredTarget(m.expected_value || '', targetCategory);
+        const issuerVal = (m.issuer || '').trim();
+
+        // Extract image file from ZIP (exact match, case-insensitive, or matching basename)
+        let fileInZip = zip.file(filename);
+        if (!fileInZip) {
+          const found = zip.filter((path, f) => !f.dir && (
+            path.toLowerCase() === filename.toLowerCase() ||
+            path.endsWith('/' + filename) ||
+            normalizeKey(path) === normalizedKey
+          ));
+          if (found.length > 0) {
+            fileInZip = found[0];
+          }
+        }
+
+        let objectUrl = '';
+        if (fileInZip) {
+          const imgBlob = await fileInZip.async('blob');
+          objectUrl = URL.createObjectURL(imgBlob);
+          const restoredFile = new File([imgBlob], filename, { type: imgBlob.type || 'image/jpeg' });
+          filesToUpload.push(restoredFile);
+        }
+
+        const itemId = `restored_${targetCategory}_${Date.now()}_${i}`;
+        const poolItem: PoolItem = {
+          id: itemId,
+          title: filename,
+          customImageUrl: objectUrl,
+          target: cleanVal,
+          expectedNumber: cleanVal,
+          issuer: issuerVal,
+          companyName: issuerVal || filename,
+          category: targetCategory,
+          isSynced: true,
+          matchedFromCsv: true,
+          matchedIdentifier: filename
+        };
+        reconstructedItems.push(poolItem);
+
+        dbUpsertRows.push({
+          category: targetCategory,
+          image_identifier: normalizedKey,
+          expected_value: cleanVal,
+          issuer_or_note: issuerVal
+        });
+
+        cacheUpdates[normalizedKey] = {
+          expected_value: cleanVal,
+          issuer_or_note: issuerVal
+        };
+      }
+
+      // Batch-upsert all labels into Supabase 'training_labels' table
+      if (dbUpsertRows.length > 0) {
+        try {
+          await supabase.from('training_labels').upsert(dbUpsertRows, {
+            onConflict: 'category,image_identifier'
+          });
+        } catch (err) {
+          console.warn('Supabase batch upsert on restore warning:', err);
+        }
+      }
+
+      // Update LocalStorage cache for category
+      const cacheKey = `training_labels_cache_${targetCategory}`;
+      try {
+        const rawCache = localStorage.getItem(cacheKey);
+        const existingMap = rawCache ? JSON.parse(rawCache) : {};
+        localStorage.setItem(cacheKey, JSON.stringify({ ...existingMap, ...cacheUpdates }));
+      } catch (e) {
+        console.warn('LocalStorage cache update on restore warning:', e);
+      }
+
+      // Set state poolItems with natural alphanumeric sorting
+      reconstructedItems.sort((a, b) => {
+        const titleA = a.title || getItemTitle(a);
+        const titleB = b.title || getItemTitle(b);
+        return titleA.localeCompare(titleB, undefined, { numeric: true, sensitivity: 'base' });
+      });
+      setPoolItems(reconstructedItems);
+
+      // Upload extracted image files to storage / parent list
+      if (filesToUpload.length > 0 && onUploadImages) {
+        try {
+          await onUploadImages(filesToUpload, targetCategory);
+        } catch (err) {
+          console.warn('Uploading restored files to parent pool warning:', err);
+        }
+      }
+
+      // Propagate target values to parent customInvoices
+      reconstructedItems.forEach((item) => {
+        onUpdateCode(item.id, item.target);
+        if (item.issuer && onUpdateCompany) {
+          onUpdateCompany(item.id, item.issuer);
+        }
+      });
+
+      const catLabel = getCategoryLabel(targetCategory);
+      setToastFeedback({
+        type: 'success',
+        message: `ZIP ဖိုင်မှ ${catLabel} ပုံပေါင်း ${reconstructedItems.length} ပုံနှင့် သတ်မှတ်တန်ဖိုးများကို အောင်မြင်စွာ ပြန်လည် ထည့်သွင်းပြီးပါပြီ။`
+      });
+    } catch (err: any) {
+      console.error('Failed to restore from ZIP:', err);
+      setToastFeedback({
+        type: 'error',
+        message: `ZIP ဖိုင်အား ပြန်လည် ထည့်သွင်းရာတွင် ချို့ယွင်းချက် ဖြစ်ပေါ်ပါသည်: ${err?.message || 'Invalid ZIP'}`
+      });
+    } finally {
+      setIsRestoringZip(false);
+    }
+  };
+
+  /**
    * Template Generator Logic (downloadCsvTemplate):
-   * - Generates standard CSV with UTF-8 BOM ("\uFEFF").
-   * - Headers: "Image_Identifier,Expected_Value,Category,Issuer_Or_Note".
+   * Generates standard CSV with UTF-8 BOM ("\uFEFF").
    */
   const downloadCsvTemplate = () => {
     const escapeCsv = (field: unknown): string => {
@@ -461,7 +766,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
   /**
    * CSV Parser & Bulk Matcher (handleCsvImport):
-   * Imports labels and updates both active state, LocalStorage mirror, and Supabase.
+   * Imports labels and updates active state, LocalStorage mirror, and Supabase.
    */
   const handleCsvImport = async (file: File) => {
     try {
@@ -648,7 +953,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
     tax_number: {
       title: '🧾 Tax Number Data Entry (登録番号)',
       subtitle: 'Transcribe 13-digit Japanese Qualified Invoice Tax Registration Numbers from receipt images.',
-      inputRule: 'Enter 13 numeric digits (without \'T\'). Hyphens are skipped.',
+      inputRule: "Enter 13 numeric digits (without 'T'). Hyphens are skipped.",
       autoAdvance: 'Auto-advances immediately upon typing 13 numeric digits.',
       slaTarget: 'Target speed is under 6.00 seconds per invoice with ≥ 95% accuracy.',
       codePlaceholder: '1234567890123',
@@ -670,8 +975,8 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
     phone_number: {
       title: '📞 Phone Number Data Entry (電話番号 / TEL)',
       subtitle: 'Transcribe Japanese Contact Telephone Numbers (10 to 11 digits) from receipt images.',
-      inputRule: 'Enter numeric digits only (e.g. 0312345678 or 09012345678). Hyphens are automatically stripped.',
-      autoAdvance: 'Auto-advances immediately upon matching the expected telephone digit length (10 or 11 digits).',
+      inputRule: 'Enter numeric digits only (e.g. 0312345678 or 09012345678). Leading zeros are preserved.',
+      autoAdvance: 'Auto-advances immediately upon matching expected telephone digit length (10 or 11 digits).',
       slaTarget: 'Target speed is under 5.00 seconds per invoice with ≥ 95% accuracy.',
       codePlaceholder: '0312345678',
       codeLabel: 'Phone Number (10-11 digits)',
@@ -910,7 +1215,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
             </div>
           </div>
 
-          {/* Catalog List of Loaded Images (Admin Editable) */}
+          {/* Catalog List of Loaded Images (Admin Editable Toolbar & Grid) */}
           <div className="space-y-2 pt-3 border-t border-slate-200">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="text-[10px] uppercase font-bold tracking-widest text-slate-500 flex items-center gap-1">
@@ -918,7 +1223,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               </span>
               
               <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                {/* Two-Way Standard CSV Label Template Management Buttons */}
+                {/* 1. Standard CSV Template Download Button */}
                 <button
                   type="button"
                   onClick={downloadCsvTemplate}
@@ -930,6 +1235,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                   <span>Download CSV Template</span>
                 </button>
 
+                {/* 2. CSV Import Labels Button */}
                 <button
                   type="button"
                   onClick={() => csvFileInputRef.current?.click()}
@@ -955,6 +1261,47 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                   }}
                 />
 
+                {/* 3. [📦 EXPORT ZIP BACKUP] Button */}
+                <button
+                  type="button"
+                  onClick={handleExportCategoryZip}
+                  disabled={isExportingZip}
+                  className="text-[9px] bg-purple-50 hover:bg-purple-100 active:bg-purple-200 border border-purple-200 text-purple-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 shadow-2xs disabled:opacity-50"
+                  title="Export complete category ZIP backup including images and manifest.json"
+                  aria-label="Export ZIP Backup"
+                >
+                  <Archive className={`w-3 h-3 text-purple-600 ${isExportingZip ? 'animate-spin' : ''}`} />
+                  <span>{isExportingZip ? 'Exporting...' : '📦 EXPORT ZIP BACKUP'}</span>
+                </button>
+
+                {/* 4. [📥 RESTORE FROM ZIP] Button */}
+                <button
+                  type="button"
+                  onClick={() => zipFileInputRef.current?.click()}
+                  disabled={isRestoringZip}
+                  className="text-[9px] bg-amber-50 hover:bg-amber-100 active:bg-amber-200 border border-amber-200 text-amber-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 shadow-2xs disabled:opacity-50"
+                  title="Restore category images and verified targets from a backup ZIP file"
+                  aria-label="Restore from ZIP"
+                >
+                  <FileArchive className={`w-3 h-3 text-amber-600 ${isRestoringZip ? 'animate-spin' : ''}`} />
+                  <span>{isRestoringZip ? 'Restoring...' : '📥 RESTORE FROM ZIP'}</span>
+                </button>
+
+                {/* Hidden ZIP file input */}
+                <input
+                  ref={zipFileInputRef}
+                  type="file"
+                  accept=".zip, application/zip, application/x-zip-compressed"
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files && e.target.files[0]) {
+                      handleRestoreCategoryZip(e.target.files[0]);
+                      e.target.value = '';
+                    }
+                  }}
+                />
+
+                {/* 5. Sync/Refresh Pool Button */}
                 {onRefreshPool && (
                   <button
                     onClick={async () => {
@@ -969,12 +1316,16 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                     <span>Sync/Refresh Pool</span>
                   </button>
                 )}
+
+                {/* 6. Populate Sample Image Button */}
                 <button
                   onClick={() => onAddSample(category)}
                   className="text-[9px] bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1"
                 >
                   <Plus className="w-3 h-3" /> Populate Sample Image
                 </button>
+
+                {/* 7. Clear Pool Button */}
                 {sortedPoolItems.length > 0 && (
                   <button
                     onClick={() => {
@@ -993,7 +1344,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               <div className="border border-slate-200 rounded-xl p-6 text-center bg-white">
                 <p className="text-slate-400 text-xs font-semibold">No images in this category pool yet</p>
                 <p className="text-[10px] text-slate-400 mt-1.5 max-w-sm mx-auto leading-relaxed">
-                  Drop your receipt image files above or click <strong className="text-indigo-600 cursor-pointer hover:underline" onClick={() => onAddSample(category)}>Populate Sample Image</strong> to immediately test with generated receipts!
+                  Drop your receipt image files above, restore a <strong className="text-amber-700 cursor-pointer hover:underline" onClick={() => zipFileInputRef.current?.click()}>ZIP Backup</strong>, or click <strong className="text-indigo-600 cursor-pointer hover:underline" onClick={() => onAddSample(category)}>Populate Sample Image</strong> to immediately test with generated receipts!
                 </p>
               </div>
             ) : (
@@ -1135,15 +1486,28 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setShowPoolCatalog(!showPoolCatalog)}
-              className="text-xs font-bold text-indigo-200 hover:text-white bg-indigo-900/60 hover:bg-indigo-800 border border-indigo-400/30 px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0"
-              aria-expanded={showPoolCatalog}
-            >
-              <FileImage className="w-3.5 h-3.5 text-indigo-400" />
-              <span>{showPoolCatalog ? '✕ Hide Catalog' : `👁️ View Pool Images (${sortedPoolItems.length})`}</span>
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={handleExportCategoryZip}
+                disabled={isExportingZip || sortedPoolItems.length === 0}
+                className="text-xs font-bold text-purple-200 hover:text-white bg-purple-950/60 hover:bg-purple-900 border border-purple-500/30 px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0 disabled:opacity-50"
+                title="Download category ZIP backup"
+              >
+                <Archive className={`w-3.5 h-3.5 text-purple-400 ${isExportingZip ? 'animate-spin' : ''}`} />
+                <span>{isExportingZip ? 'Exporting...' : '📦 Export ZIP Backup'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowPoolCatalog(!showPoolCatalog)}
+                className="text-xs font-bold text-indigo-200 hover:text-white bg-indigo-900/60 hover:bg-indigo-800 border border-indigo-400/30 px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0"
+                aria-expanded={showPoolCatalog}
+              >
+                <FileImage className="w-3.5 h-3.5 text-indigo-400" />
+                <span>{showPoolCatalog ? '✕ Hide Catalog' : `👁️ View Pool Images (${sortedPoolItems.length})`}</span>
+              </button>
+            </div>
           </div>
 
           {/* Read-Only Invoice Catalog Pool for Trainee */}
@@ -1253,7 +1617,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
             <div className="flex items-center gap-2">
               <span className="text-base shrink-0">⚠️</span>
               <span>
-                Upload at least 1 image or click <strong className="text-indigo-700 underline cursor-pointer hover:text-indigo-900" onClick={() => onAddSample(category)}>&quot;Populate Sample Image&quot;</strong> to enable assessments.
+                Upload at least 1 image, restore a <strong className="text-amber-800 underline cursor-pointer" onClick={() => zipFileInputRef.current?.click()}>ZIP Backup</strong>, or click <strong className="text-indigo-700 underline cursor-pointer hover:text-indigo-900" onClick={() => onAddSample(category)}>&quot;Populate Sample Image&quot;</strong> to enable assessments.
               </span>
             </div>
             <button
@@ -1425,7 +1789,6 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         const isItemSynced = currentInv.isSynced || lastSavedId === currentInv.id;
 
         const handleNextReview = async () => {
-          // Auto-save if inputs differ from active record
           const cleanTarget = cleanEnteredTarget(modalTarget, category);
           if (cleanTarget !== currentInv.target || modalIssuer.trim() !== currentInv.issuer) {
             await handleSaveVerifyCode(modalTarget, modalIssuer, currentInv);
@@ -1506,14 +1869,12 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                       {category === 'date_number' 
                         ? 'Verify the 8-digit transaction date (YYYYMMDD) for this receipt image.'
                         : category === 'phone_number'
-                        ? 'Verify the telephone contact digits for this receipt image.'
+                        ? 'Verify telephone contact digits for this receipt image (leading zeros preserved).'
                         : "Enter 13 numeric digits (without 'T')"}
                     </p>
                   </div>
 
-                  {/* 3. Natural Sort & Identifier Display:
-                      Clearly display: "Image File: [item.title] | Matched Key: [normalizeKey(item.title)]"
-                      and show a small green badge "☁️ Synced to DB" when saved. */}
+                  {/* Matched Image Identifier Header */}
                   <div className="bg-indigo-50/80 border border-indigo-200/80 rounded-xl p-3 flex items-center justify-between gap-2 shadow-2xs">
                     <div className="overflow-hidden min-w-0">
                       <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 block">

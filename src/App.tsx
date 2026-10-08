@@ -1584,6 +1584,7 @@ export default function App() {
                       isAdmin={currentOfflineUser?.role === 'admin'}
                       onRefreshPool={() => fetchCustomInvoices(true)}
                       isRefreshingPool={isRefreshingInvoices}
+                      onCategoryChange={(cat) => setActiveSetupTab(cat)}
                     />
                   </Suspense>
                 ) : (
