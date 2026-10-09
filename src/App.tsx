@@ -1773,13 +1773,13 @@ export default function App() {
                           <div className="space-y-1.5 max-w-xl">
                             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-extrabold bg-indigo-500/20 text-indigo-300 border border-indigo-400/30">
                               <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                              <span>Unified 100-Card Random Assessment</span>
+                              <span>{t.heroBadge}</span>
                             </div>
                             <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white flex items-center gap-2">
-                              All-In-One Speed Training
+                              {t.heroTitle}
                             </h2>
                             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed font-sans">
-                              Combines Japanese Qualified Tax Numbers (T+13), 8-digit Dates (YYYYMMDD), and Telephone Contacts into a continuous 100-card sequence. Evaluated with strict accuracy rules and SLA tier targets.
+                              {t.heroDescription}
                             </p>
                           </div>
 
@@ -1790,33 +1790,33 @@ export default function App() {
                             className="w-full md:w-auto px-7 py-4.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-400 text-white rounded-2xl font-black text-sm sm:text-base tracking-wider uppercase shadow-xl hover:shadow-emerald-500/30 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2.5 cursor-pointer shrink-0 border border-emerald-300/40"
                           >
                             <Play className="w-5 h-5 fill-white" />
-                            <span>Start Training (100 Cards)</span>
+                            <span>{t.heroStartBtn}</span>
                           </button>
                         </div>
 
                         {/* Deck composition counts */}
                         <div className="pt-4 border-t border-indigo-800/60 grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs font-mono">
                           <div className="bg-slate-800/80 border border-indigo-500/20 p-2.5 rounded-xl">
-                            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">🧾 Tax Numbers</span>
+                            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">🧾 {t.taxNumbersLabel}</span>
                             <span className="text-base font-bold text-white">
-                              {customInvoices.filter(i => (i.category || 'tax_number') === 'tax_number').length} loaded
+                              {customInvoices.filter(i => (i.category || 'tax_number') === 'tax_number').length} {t.loadedSuffix}
                             </span>
                           </div>
                           <div className="bg-slate-800/80 border border-indigo-500/20 p-2.5 rounded-xl">
-                            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">📅 Date Numbers</span>
+                            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">📅 {t.dateNumbersLabel}</span>
                             <span className="text-base font-bold text-white">
-                              {customInvoices.filter(i => i.category === 'date_number').length} loaded
+                              {customInvoices.filter(i => i.category === 'date_number').length} {t.loadedSuffix}
                             </span>
                           </div>
                           <div className="bg-slate-800/80 border border-indigo-500/20 p-2.5 rounded-xl">
-                            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">📞 Phone Numbers</span>
+                            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">📞 {t.phoneNumbersLabel}</span>
                             <span className="text-base font-bold text-white">
-                              {customInvoices.filter(i => i.category === 'phone_number').length} loaded
+                              {customInvoices.filter(i => i.category === 'phone_number').length} {t.loadedSuffix}
                             </span>
                           </div>
                           <div className="bg-emerald-950/70 border border-emerald-500/40 p-2.5 rounded-xl">
-                            <span className="text-emerald-300 text-[10px] uppercase font-sans block font-semibold">🎴 Shuffled Pool</span>
-                            <span className="text-base font-bold text-emerald-400">100 Cards Exact</span>
+                            <span className="text-emerald-300 text-[10px] uppercase font-sans block font-semibold">🎴 {t.shuffledPoolLabel}</span>
+                            <span className="text-base font-bold text-emerald-400">{t.cardsExactLabel}</span>
                           </div>
                         </div>
                       </div>
@@ -1828,14 +1828,14 @@ export default function App() {
                       <div className="bg-rose-50/70 border border-rose-200 rounded-2xl p-4.5 space-y-2">
                         <div className="flex items-center gap-2 text-rose-800 font-extrabold text-xs uppercase tracking-wider">
                           <ShieldAlert className="w-4 h-4 text-rose-600" />
-                          <span>Strict Accuracy Rule (Max 2 Mistakes)</span>
+                          <span>{t.accuracyRuleTitle}</span>
                         </div>
                         <p className="text-xs text-rose-900 leading-relaxed font-sans">
-                          Maximum allowable mistakes across the 100 cards is <strong>2 errors</strong>. If typos exceed 2, the status is marked as <strong className="text-rose-700 underline">FAIL (Disqualified)</strong> even if your typing speed achieves Level A or B!
+                          {t.accuracyRuleDesc}
                         </p>
                         <div className="flex items-center gap-2 pt-1 font-mono text-[11px] text-rose-700">
-                          <span className="bg-white px-2 py-0.5 rounded border border-rose-200 font-bold">≤ 2 mistakes = Eligible</span>
-                          <span className="bg-rose-200/60 px-2 py-0.5 rounded font-bold text-rose-800">&gt; 2 mistakes = FAIL</span>
+                          <span className="bg-white px-2 py-0.5 rounded border border-rose-200 font-bold">{t.badgeEligible}</span>
+                          <span className="bg-rose-200/60 px-2 py-0.5 rounded font-bold text-rose-800">{t.badgeFail}</span>
                         </div>
                       </div>
 
@@ -1843,24 +1843,24 @@ export default function App() {
                       <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4.5 space-y-2">
                         <div className="flex items-center gap-2 text-slate-800 font-extrabold text-xs uppercase tracking-wider">
                           <Trophy className="w-4 h-4 text-indigo-600" />
-                          <span>Speed Ranking Evaluation Standards</span>
+                          <span>{t.speedRankingTitle}</span>
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
                           <div className="bg-white p-2 rounded-lg border border-emerald-200 text-emerald-800">
                             <strong className="block text-emerald-700">Level A: ≤ 2.3s</strong>
-                            <span className="text-[10px] text-slate-500 font-sans">Elite Expert pace</span>
+                            <span className="text-[10px] text-slate-500 font-sans">{t.eliteExpertPace}</span>
                           </div>
                           <div className="bg-white p-2 rounded-lg border border-indigo-200 text-indigo-800">
                             <strong className="block text-indigo-700">Level B: 2.4s ~ 2.5s</strong>
-                            <span className="text-[10px] text-slate-500 font-sans">Specialist pace</span>
+                            <span className="text-[10px] text-slate-500 font-sans">{t.specialistPace}</span>
                           </div>
                           <div className="bg-white p-2 rounded-lg border border-amber-200 text-amber-800">
                             <strong className="block text-amber-700">Level C: 2.6s ~ 3.0s</strong>
-                            <span className="text-[10px] text-slate-500 font-sans">Qualified standard</span>
+                            <span className="text-[10px] text-slate-500 font-sans">{t.qualifiedStandard}</span>
                           </div>
                           <div className="bg-white p-2 rounded-lg border border-blue-200 text-blue-800">
                             <strong className="block text-blue-700">Level D: 3.0s ~ 3.2s</strong>
-                            <span className="text-[10px] text-slate-500 font-sans">Practitioner pace</span>
+                            <span className="text-[10px] text-slate-500 font-sans">{t.practitionerPace}</span>
                           </div>
                         </div>
                       </div>
@@ -1870,13 +1870,13 @@ export default function App() {
                     <div className="bg-slate-900 text-slate-200 p-4 rounded-xl border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-xs">
                       <div className="flex items-center gap-2 text-indigo-300">
                         <Zap className="w-4 h-4 text-indigo-400 shrink-0" />
-                        <span><strong>Unlimited Attempts:</strong> No operator session caps. Supporting 50+ concurrent classroom stations smoothly.</span>
+                        <span><strong>{t.unlimitedAttemptsBannerTitle}</strong> {t.unlimitedAttemptsBannerDesc}</span>
                       </div>
                       <button
                         onClick={startAllInOneTrainingSession}
                         className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-xs uppercase tracking-wider cursor-pointer transition shrink-0"
                       >
-                        Launch 100-Card Run ➔
+                        {t.launch100CardRunBtn}
                       </button>
                     </div>
                   </div>
@@ -2119,14 +2119,14 @@ export default function App() {
                 <div className="border-b border-slate-150 pb-5 mb-1">
                   <div className="flex items-center space-x-2 text-indigo-650 font-bold text-xs uppercase tracking-widest">
                     <Award className="w-4 h-4 text-indigo-600" />
-                    <span>Your Latest Speed Run</span>
+                    <span>{t.latestRunTitle}</span>
                   </div>
                   {latestSessionByMe ? (
                     <div className="mt-3 bg-gradient-to-br from-indigo-50/50 to-white border border-indigo-150 rounded-xl p-4 space-y-3.5 shadow-sm">
                       <div className="flex items-center justify-between">
                         <div>
                           <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">
-                            Average Pace
+                            {t.averagePaceLabel}
                           </span>
                           <span className="block text-2xl font-bold text-slate-800 mt-1 font-mono">
                             {(latestSessionByMe.averageTimeMs / 1000).toFixed(2)}s
@@ -2134,7 +2134,7 @@ export default function App() {
                         </div>
                         <div className="text-right">
                           <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">
-                            Rank Level
+                            {t.rankLevelLabel}
                           </span>
                           <span className={`inline-block text-[10px] px-2 py-0.5 rounded font-extrabold uppercase mt-1 ${
                             latestSessionByMe.level === 'A' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
@@ -2149,7 +2149,7 @@ export default function App() {
 
                       <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-indigo-100 font-sans">
                         <div>
-                          <span className="text-slate-400">Accuracy:</span>{' '}
+                          <span className="text-slate-400">{t.accuracyScore}:</span>{' '}
                           <strong className="text-slate-700 font-mono font-bold">
                             {latestSessionByMe.totalImagesAttempted > 0 
                               ? Math.round((latestSessionByMe.correctEntries / latestSessionByMe.totalImagesAttempted) * 100) 
@@ -2157,7 +2157,7 @@ export default function App() {
                           </strong>
                         </div>
                         <div className="text-right">
-                          <span className="text-slate-400">Category:</span>{' '}
+                          <span className="text-slate-400">{t.categoryLabel}:</span>{' '}
                           <strong className="text-indigo-600 font-bold uppercase text-[10px]">
                             {latestSessionByMe.category === 'date_number' ? 'Date' : latestSessionByMe.category === 'phone_number' ? 'Phone' : 'Tax No'}
                           </strong>
@@ -2166,16 +2166,13 @@ export default function App() {
 
                       <div className="text-[9px] text-slate-400 font-mono text-center flex items-center justify-center gap-1 leading-none">
                         <Clock className="w-3 h-3 text-slate-400 shrink-0" />
-                        <span>Achieved: {new Date(latestSessionByMe.timestamp).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                        <span>{t.achievedLabel}: {new Date(latestSessionByMe.timestamp).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
                     </div>
                   ) : (
                     <div className="mt-3 bg-slate-50 border border-dashed border-slate-200 rounded-xl p-4 text-center">
-                      <p className="text-xs text-slate-500 font-medium leading-normal">
-                        No assessment scoring found for <strong>{currentOfflineUser.username}</strong> on this workstation yet.
-                      </p>
-                      <p className="text-[10px] text-slate-400 mt-1.5 leading-relaxed">
-                        Execute an assessment benchmark above to record your performance.
+                      <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                        {t.noAssessment.replace('{user}', currentOfflineUser.username)}
                       </p>
                     </div>
                   )}
@@ -2187,7 +2184,7 @@ export default function App() {
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                         <Zap className="w-3.5 h-3.5 text-indigo-600 fill-indigo-600" />
-                        Target Speed Standard
+                        {t.targetSpeedTitle}
                       </span>
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 font-mono">
                         Level A: {CATEGORY_SLA_CONFIG[activeTrainingCategory]?.levels.A.rangeShort || 'Under 3.0s'}
@@ -2218,20 +2215,20 @@ export default function App() {
                   <div className="space-y-2 text-xs">
                     <div className="flex items-center gap-1.5 text-slate-700 font-bold">
                       <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                      <span>Speed & Precision Tips</span>
+                      <span>{t.tipsTitle}</span>
                     </div>
                     <ul className="space-y-1.5 text-[11px] text-slate-500 leading-normal">
                       <li className="flex items-start gap-1.5">
                         <span className="text-indigo-600 font-bold shrink-0">⌨️</span>
-                        <span>Anchor index finger on the <strong>Tenkey Numpad (4-5-6)</strong> home row for rapid blind entry.</span>
+                        <span>{t.tip1}</span>
                       </li>
                       <li className="flex items-start gap-1.5">
                         <span className="text-emerald-600 font-bold shrink-0">⚡</span>
-                        <span><strong>Zero Enter Key:</strong> Auto-advance submits automatically upon typing target length.</span>
+                        <span>{t.tip2}</span>
                       </li>
                       <li className="flex items-start gap-1.5">
                         <span className="text-pink-600 font-bold shrink-0">🎯</span>
-                        <span>Scan the receipt text before placing fingers to minimize visual recognition latency.</span>
+                        <span>{t.tip3}</span>
                       </li>
                     </ul>
                   </div>
@@ -2241,15 +2238,15 @@ export default function App() {
               <div className="mt-5 space-y-2">
                 <div className="bg-slate-50 p-3 rounded-xl border border-slate-150 text-slate-500 text-[11px] flex items-center gap-2">
                   <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0" />
-                  <span>Standard SLA requires <strong>≥ 95% accuracy</strong> and <strong>Level C or better</strong> to qualify.</span>
+                  <span>{t.slaFooter}</span>
                 </div>
 
                 <div className="bg-slate-900 text-slate-200 p-3 rounded-xl border border-slate-800 text-[11px] space-y-1 font-mono shadow-xs">
                   <div className="flex items-center gap-2 text-emerald-400 font-semibold">
-                    <span>🟢 Supabase Cloud Database Connected (Unlimited Reads)</span>
+                    <span>{t.supabaseConnectedNotice}</span>
                   </div>
                   <div className="flex items-center gap-2 text-indigo-300">
-                    <span>⚡ High-precision performance.now() timer active</span>
+                    <span>{t.precisionTimerNotice}</span>
                   </div>
                 </div>
               </div>

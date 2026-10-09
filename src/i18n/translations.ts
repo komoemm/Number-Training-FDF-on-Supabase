@@ -130,6 +130,52 @@ export interface Translations {
   syncSuccess: string;
   savedOffline: string;
   copiedToClipboard: string;
+
+  // Dashboard & Hero Section
+  heroBadge: string;
+  heroTitle: string;
+  heroDescription: string;
+  heroStartBtn: string;
+  taxNumbersLabel: string;
+  dateNumbersLabel: string;
+  phoneNumbersLabel: string;
+  loadedSuffix: string;
+  shuffledPoolLabel: string;
+  cardsExactLabel: string;
+
+  // Strict Accuracy Rule Card
+  accuracyRuleTitle: string;
+  accuracyRuleDesc: string;
+  badgeEligible: string;
+  badgeFail: string;
+
+  // Speed Ranking Standards
+  speedRankingTitle: string;
+  eliteExpertPace: string;
+  specialistPace: string;
+  qualifiedStandard: string;
+  practitionerPace: string;
+
+  // Unlimited Attempts Banner
+  unlimitedAttemptsBannerTitle: string;
+  unlimitedAttemptsBannerDesc: string;
+  launch100CardRunBtn: string;
+
+  // Right Sidebar (Stats & Tips)
+  latestRunTitle: string;
+  averagePaceLabel: string;
+  rankLevelLabel: string;
+  categoryLabel: string;
+  achievedLabel: string;
+  noAssessment: string;
+  targetSpeedTitle: string;
+  tipsTitle: string;
+  tip1: string;
+  tip2: string;
+  tip3: string;
+  slaFooter: string;
+  supabaseConnectedNotice: string;
+  precisionTimerNotice: string;
 }
 
 export const translations: Record<Language, Translations> = {
@@ -262,7 +308,53 @@ export const translations: Record<Language, Translations> = {
     // Toast / General Notifications
     syncSuccess: 'အောင်မြင်စွာ သိမ်းဆည်းပြီးပါပြီ။',
     savedOffline: 'စက်တွင်း၌ အော့ဖ်လိုင်း သိမ်းဆည်းထားပါသည်။',
-    copiedToClipboard: 'ကူးယူပြီးပါပြီ။'
+    copiedToClipboard: 'ကူးယူပြီးပါပြီ။',
+
+    // Dashboard & Hero Section
+    heroBadge: 'ကတ် ၁၀၀ ပေါင်းစပ် ကျပန်းစစ်ဆေးမှု',
+    heroTitle: 'All-In-One အမြန်နှုန်းလေ့ကျင့်မှု',
+    heroDescription: 'ဂျပန် Tax နံပါတ်များ (T+13)၊ ဂဏန်း ၈ လုံး ရက်စွဲများ (YYYYMMDD) နှင့် ဖုန်းနံပါတ်များကို ကတ် ၁၀၀ ဆက်တိုက်လေ့ကျင့်ရန် ပေါင်းစပ်ထားသည်။ တိကျမှုစည်းမျဉ်းများနှင့် SLA အဆင့်များဖြင့် အကဲဖြတ်သည်။',
+    heroStartBtn: 'လေ့ကျင့်မှု စတင်မည် (ကတ် ၁၀၀)',
+    taxNumbersLabel: 'Tax နံပါတ်များ',
+    dateNumbersLabel: 'ရက်စွဲနံပါတ်များ',
+    phoneNumbersLabel: 'ဖုန်းနံပါတ်များ',
+    loadedSuffix: 'ထည့်သွင်းပြီး',
+    shuffledPoolLabel: 'ကျပန်းရောနှောထားသော ကတ်များ',
+    cardsExactLabel: 'ကတ် ၁၀၀ တိကျစွာ',
+
+    // Strict Accuracy Rule Card
+    accuracyRuleTitle: 'တိကျမှု တင်းကျပ်သော စည်းမျဉ်း (အမှားအများဆုံး ၂ ကြိမ်)',
+    accuracyRuleDesc: 'ကတ် ၁၀၀ အတွင်း အများဆုံး မှားယွင်းခွင့်မှာ ၂ ကြိမ်သာ ဖြစ်သည်။ ၂ ကြိမ်ထက်ကျော်ပါက သင်၏ ရိုက်နှိပ်နှုန်း Level A သို့မဟုတ် B ရရှိထားသော်လည်း ကျရှုံး (FAIL) အဖြစ် သတ်မှတ်မည်!',
+    badgeEligible: '≤ ၂ ကြိမ် မှားယွင်းမှု = အောင်မြင်',
+    badgeFail: '> ၂ ကြိမ် မှားယွင်းမှု = ကျရှုံး',
+
+    // Speed Ranking Standards
+    speedRankingTitle: 'အမြန်နှုန်း သတ်မှတ်ချက် အဆင့်များ',
+    eliteExpertPace: 'Elite Expert pace',
+    specialistPace: 'Specialist pace',
+    qualifiedStandard: 'Qualified standard',
+    practitionerPace: 'Practitioner pace',
+
+    // Unlimited Attempts Banner
+    unlimitedAttemptsBannerTitle: 'ကန့်သတ်ချက်မရှိ စမ်းသပ်နိုင်သည်:',
+    unlimitedAttemptsBannerDesc: 'အကြိမ်အရေအတွက် ကန့်သတ်ချက်မရှိဘဲ စာသင်ခန်းသုံး ကွန်ပျူတာ ၅၀ ကျော် တစ်ပြိုင်နက်တည်း အဆင်ပြေစွာ သုံးနိုင်ပါသည်။',
+    launch100CardRunBtn: 'ကတ် ၁၀၀ လေ့ကျင့်မှု စတင်မည် ➔',
+
+    // Right Sidebar (Stats & Tips)
+    latestRunTitle: 'သင်၏ နောက်ဆုံး အမြန်နှုန်း ရလဒ်',
+    averagePaceLabel: 'ပျမ်းမျှကြာချိန်',
+    rankLevelLabel: 'အဆင့်သတ်မှတ်ချက်',
+    categoryLabel: 'အမျိုးအစား',
+    achievedLabel: 'ရရှိခဲ့သည့်အချိန်',
+    noAssessment: 'ဤကွန်ပျူတာတွင် {user} အတွက် စစ်ဆေးမှု ရမှတ် မရှိသေးပါ။ သင်၏ စွမ်းဆောင်ရည်ကို မှတ်တမ်းတင်ရန် အထက်ပါ စစ်ဆေးမှုကို စတင်ပါ။',
+    targetSpeedTitle: 'ရည်မှန်းချက် အမြန်နှုန်း စံနှုန်း',
+    tipsTitle: 'အမြန်နှုန်းနှင့် တိကျမှုဆိုင်ရာ အကြံပြုချက်များ',
+    tip1: 'မျက်စိမကြည့်ဘဲ အမြန်ရိုက်နိုင်ရန် လက်ညှိုးကို Tenkey Numpad (4-5-6) အလယ်တန်းပေါ်တွင် အမြဲတင်ထားပါ။',
+    tip2: 'Zero Enter စနစ်: သတ်မှတ်ဂဏန်း အရှည်ပြည့်ပါက Enter ခေါက်စရာမလိုဘဲ အလိုအလျောက် ရှေ့ဆက်ပါမည်။',
+    tip3: 'မျက်စိနှင့် လက်ချောင်း တုံ့ပြန်မှု နှောင့်နှေးခြင်းကို လျှော့ချရန် လက်ချောင်းများ မရိုက်မီ ပြေစာစာသားကို ကြိုတင် ကြည့်ရှုပါ။',
+    slaFooter: 'စံ SLA အရ အောင်မြင်ရန် အနည်းဆုံး ၉၅% တိကျမှုနှင့် Level C သို့မဟုတ် ထို့ထက် ပိုမိုကောင်းမွန်ရန် လိုအပ်သည်။',
+    supabaseConnectedNotice: '🟢 Supabase Cloud ဒေတာဘေ့စ် ချိတ်ဆက်ပြီး (ဖတ်ရှုမှု ကန့်သတ်ချက်မရှိ)',
+    precisionTimerNotice: '⚡ တိကျမှုမြင့်မားသော performance.now() အချိန်မှတ်စနစ် အသုံးပြုထားသည်'
   },
   en: {
     // App / Brand
@@ -393,6 +485,52 @@ export const translations: Record<Language, Translations> = {
     // Toast / General Notifications
     syncSuccess: 'Synced successfully.',
     savedOffline: 'Persisted to local offline storage.',
-    copiedToClipboard: 'Copied to clipboard.'
+    copiedToClipboard: 'Copied to clipboard.',
+
+    // Dashboard & Hero Section
+    heroBadge: 'Unified 100-Card Random Assessment',
+    heroTitle: 'All-In-One Speed Training',
+    heroDescription: 'Combines Japanese Qualified Tax Numbers (T+13), 8-digit Dates (YYYYMMDD), and Telephone Contacts into a continuous 100-card sequence. Evaluated with strict accuracy rules and SLA tier targets.',
+    heroStartBtn: 'START TRAINING (100 CARDS)',
+    taxNumbersLabel: 'Tax Numbers',
+    dateNumbersLabel: 'Date Numbers',
+    phoneNumbersLabel: 'Phone Numbers',
+    loadedSuffix: 'loaded',
+    shuffledPoolLabel: 'Shuffled Pool',
+    cardsExactLabel: '100 Cards Exact',
+
+    // Strict Accuracy Rule Card
+    accuracyRuleTitle: 'STRICT ACCURACY RULE (MAX 2 MISTAKES)',
+    accuracyRuleDesc: 'Maximum allowable mistakes across the 100 cards is 2 errors. If typos exceed 2, the status is marked as FAIL (Disqualified) even if your typing speed achieves Level A or B!',
+    badgeEligible: '≤ 2 mistakes = Eligible',
+    badgeFail: '> 2 mistakes = FAIL',
+
+    // Speed Ranking Standards
+    speedRankingTitle: 'SPEED RANKING EVALUATION STANDARDS',
+    eliteExpertPace: 'Elite Expert pace',
+    specialistPace: 'Specialist pace',
+    qualifiedStandard: 'Qualified standard',
+    practitionerPace: 'Practitioner pace',
+
+    // Unlimited Attempts Banner
+    unlimitedAttemptsBannerTitle: 'Unlimited Attempts:',
+    unlimitedAttemptsBannerDesc: 'No operator session caps. Supporting 50+ concurrent classroom stations smoothly.',
+    launch100CardRunBtn: 'Launch 100-Card Run ➔',
+
+    // Right Sidebar (Stats & Tips)
+    latestRunTitle: 'YOUR LATEST SPEED RUN',
+    averagePaceLabel: 'Average Pace',
+    rankLevelLabel: 'Rank Level',
+    categoryLabel: 'Category',
+    achievedLabel: 'Achieved',
+    noAssessment: 'No assessment scoring found for {user} on this workstation yet. Execute an assessment benchmark above to record your performance.',
+    targetSpeedTitle: 'Target Speed Standard',
+    tipsTitle: 'Speed & Precision Tips',
+    tip1: 'Anchor index finger on the Tenkey Numpad (4-5-6) home row for rapid blind entry.',
+    tip2: 'Zero Enter Key: Auto-advance submits automatically upon typing target length.',
+    tip3: 'Scan the receipt text before placing fingers to minimize visual recognition latency.',
+    slaFooter: 'Standard SLA requires ≥ 95% accuracy and Level C or better to qualify.',
+    supabaseConnectedNotice: '🟢 Supabase Cloud Database Connected (Unlimited Reads)',
+    precisionTimerNotice: '⚡ High-precision performance.now() timer active'
   }
 };
