@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { Award, Zap, Percent, Clock, Trophy, TrendingUp, Filter, Globe, Sparkles, CheckCircle2, Layers } from 'lucide-react';
 import { TestSession, LeaderboardEntry, TrainingMode, TrainingCategory } from '../types';
 import { evaluateCategoryLevel, getCategorySlaCards, CATEGORY_SLA_CONFIG } from '../utils/speedRanking';
+import { useLanguage } from '../context/LanguageContext';
 
 interface StatsPanelProps {
   currentIndex: number;
@@ -17,6 +18,7 @@ interface StatsPanelProps {
   isTestActive: boolean;
   trainingMode?: TrainingMode;
   category?: TrainingCategory;
+  mistakesCount?: number;
 }
 
 export default function StatsPanel({
@@ -26,9 +28,11 @@ export default function StatsPanel({
   elapsedMs,
   averageTimeMs,
   isTestActive,
-  trainingMode = 'easy_20',
-  category = 'tax_number'
+  trainingMode = 'all_in_one_100',
+  category = 'all_in_one',
+  mistakesCount = 0
 }: StatsPanelProps) {
+  const { t } = useLanguage();
   
   // Calculate running accuracy
   const totalCompleted = currentIndex;
@@ -39,18 +43,20 @@ export default function StatsPanel({
   const averageTimeSec = averageTimeMs > 0 ? (averageTimeMs / 1000).toFixed(2) : '0.00';
 
   // Category specific character count and SLA
-  const characterCount = category === 'tax_number' ? 14 : category === 'date_number' ? 8 : 11;
+  const characterCount = category === 'tax_number' ? 14 : category === 'date_number' ? 8 : category === 'phone_number' ? 11 : 12;
   const cpm = averageTimeMs > 0 ? Math.round((characterCount / (averageTimeMs / 1000)) * 60) : 0;
   const wpm = Math.round(cpm / 5);
 
-  const categoryLabel = category === 'date_number' 
+  const categoryLabel = category === 'all_in_one'
+    ? '⚡ All-In-One Speed Training'
+    : category === 'date_number' 
     ? '📅 Date Number' 
     : category === 'phone_number' 
     ? '📞 Phone Number' 
     : '🧾 Tax Number';
 
-  const slaTargetSec = category === 'date_number' ? '1.30s' : category === 'phone_number' ? '2.50s' : '3.00s';
-  const slaTargetMs = category === 'date_number' ? 1300 : category === 'phone_number' ? 2500 : 3000;
+  const slaTargetSec = category === 'all_in_one' ? '2.30s' : category === 'date_number' ? '1.30s' : category === 'phone_number' ? '2.50s' : '3.00s';
+  const slaTargetMs = category === 'all_in_one' ? 2300 : category === 'date_number' ? 1300 : category === 'phone_number' ? 2500 : 3000;
 
   // Meter ratios
   const progressRatio = isTestActive ? Math.round(((currentIndex) / totalCount) * 100) : 100;
@@ -67,7 +73,12 @@ export default function StatsPanel({
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-indigo-50 text-indigo-800 border border-indigo-200 shadow-xs font-sans tracking-wide">
               {categoryLabel}
             </span>
-            {trainingMode === 'hard_180' ? (
+            {trainingMode === 'all_in_one_100' ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-gradient-to-r from-amber-500 to-indigo-600 text-white shadow-xs font-sans tracking-wide">
+                <span className="w-2 h-2 rounded-full bg-white animate-pulse"></span>
+                ⚡ 100-Card Speed Training (Max 2 Mistakes)
+              </span>
+            ) : trainingMode === 'hard_180' ? (
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-extrabold bg-purple-50 text-purple-800 border border-purple-200 shadow-xs font-sans tracking-wide">
                 <span className="w-2 h-2 rounded-full bg-purple-600 animate-pulse"></span>
                 ⚡ Hard Mode (180 Invoices)
@@ -83,9 +94,20 @@ export default function StatsPanel({
                 🟢 Easy Mode (20 Invoices)
               </span>
             )}
+            {trainingMode === 'all_in_one_100' && (
+              <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold border font-mono ${
+                mistakesCount === 0
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : mistakesCount <= 2
+                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                  : 'bg-rose-100 text-rose-800 border-rose-300 animate-pulse'
+              }`}>
+                Mistakes: {mistakesCount} / 2 allowed {mistakesCount > 2 ? '⚠️ FAIL' : ''}
+              </span>
+            )}
           </div>
           <span className="text-[11px] font-mono text-slate-400 font-bold">
-            Target SLA &lt; {slaTargetSec} / Doc
+            Target SLA &lt; {slaTargetSec} / Card
           </span>
         </div>
       )}
@@ -98,7 +120,7 @@ export default function StatsPanel({
           </div>
           <div className="flex-1 min-w-0">
             <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">
-              Worksheet Progress
+              {t.progressLabel}
             </span>
             <span className="block text-2xl font-bold text-slate-800 mt-1 font-mono">
               {isTestActive ? `${currentIndex + 1}/${totalCount}` : `Completed`}
@@ -122,7 +144,7 @@ export default function StatsPanel({
           </div>
           <div className="flex-1 min-w-0">
             <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">
-              Active Scan Clock
+              {t.elapsedTime}
             </span>
             <span className={`block text-2xl font-bold mt-1 font-mono transition-colors ${
               parseFloat(currentElapsedSec) > 6.0 && isTestActive ? 'text-amber-600' : 'text-slate-800'
@@ -148,7 +170,7 @@ export default function StatsPanel({
           </div>
           <div className="flex-1 min-w-0">
             <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">
-              Accuracy Metric
+              {t.accuracyLabel}
             </span>
             <span className="block text-2xl font-bold text-slate-800 mt-1 font-mono">
               {accuracy}%
@@ -170,7 +192,7 @@ export default function StatsPanel({
           </div>
           <div className="flex-1 min-w-0">
             <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">
-              Mean Input Pace
+              {t.averageSpeedLabel}
             </span>
             <span className="block text-2xl font-bold text-slate-800 mt-1 font-mono">
               {averageTimeSec}s

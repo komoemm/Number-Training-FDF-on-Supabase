@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type TrainingMode = 'easy_20' | 'normal_90' | 'hard_180';
-export type TrainingCategory = 'tax_number' | 'date_number' | 'phone_number';
+export type TrainingMode = 'easy_20' | 'normal_90' | 'hard_180' | 'all_in_one_100';
+export type TrainingCategory = 'tax_number' | 'date_number' | 'phone_number' | 'all_in_one';
 
 export interface TypingDetail {
   imageId: string;
@@ -22,6 +22,9 @@ export interface TestSession {
   timestamp: Date | string | any;
   totalImagesAttempted: number;
   correctEntries: number;
+  mistakesCount?: number;
+  isPassed?: boolean;
+  status?: 'PASSED' | 'FAILED';
   averageTimeMs: number;
   averageSpeed?: number;
   accuracy?: number;

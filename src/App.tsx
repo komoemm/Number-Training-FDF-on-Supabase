@@ -12,15 +12,30 @@ import {
   generateRandomDateNumber,
   generateRandomPhoneNumber
 } from './utils/receiptGenerator';
-import { evaluateCategoryLevel, getCategoryRankDetails, CATEGORY_SLA_CONFIG } from './utils/speedRanking';
+import { 
+  evaluateCategoryLevel, 
+  getCategoryRankDetails, 
+  evaluateAllInOneSession, 
+  AllInOneEvaluation,
+  CATEGORY_SLA_CONFIG 
+} from './utils/speedRanking';
 import { GeneratedInvoiceData, TypingDetail, TestSession, TrainingMode, TrainingCategory } from './types';
 import LoginScreen from './components/LoginScreen';
+import LanguageSwitcher from './components/LanguageSwitcher';
+import { useLanguage } from './context/LanguageContext';
 import { 
   Zap, Keyboard, ShieldAlert, CheckCircle2, ChevronRight, ChevronLeft,
   RotateCcw, LogOut, HelpCircle, Trophy, BarChart2, Check, X,
   Clock, Database, Award, Download, Users, FileText, Calendar, Phone,
-  Sparkles, ShieldCheck
+  Sparkles, ShieldCheck, AlertCircle, Layers, Play
 } from 'lucide-react';
+
+function formatMinutesSeconds(totalMs: number): string {
+  const totalSec = Math.floor(totalMs / 1000);
+  const mm = Math.floor(totalSec / 60);
+  const ss = totalSec % 60;
+  return `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+}
 
 // Lazy-loaded heavy components to optimize initial bundle size, LCP, and INP
 const CategorySandbox = lazy(() => import('./components/CategorySandbox').then(m => ({ default: m.default || m.CategorySandbox })));
@@ -58,6 +73,8 @@ function LoadingFallback({
 }
 
 export default function App() {
+  const { t, language } = useLanguage();
+
   // Application & System states
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
 
@@ -363,9 +380,9 @@ export default function App() {
     }
   };
 
-  // Setup tabs selection: 3 Training Categories + Admin Users Management
-  const [activeSetupTab, setActiveSetupTab] = useState<'tax_number' | 'date_number' | 'phone_number' | 'users'>('tax_number');
-  const [activeTrainingCategory, setActiveTrainingCategory] = useState<TrainingCategory>('tax_number');
+  // Setup tabs selection: Unified All-In-One Speed Training + Admin Users + Admin Card Pools
+  const [activeSetupTab, setActiveSetupTab] = useState<'all_in_one' | 'users' | 'catalog'>('all_in_one');
+  const [activeTrainingCategory, setActiveTrainingCategory] = useState<TrainingCategory>('all_in_one');
   
   // Custom invoices uploaded from local system (multi-category support)
   const [customInvoices, setCustomInvoices] = useState<(GeneratedInvoiceData & { customImageUrl?: string })[]>(() => {
@@ -394,7 +411,7 @@ export default function App() {
 
   // Core Speed Test States
   const [isTestActive, setIsTestActive] = useState<boolean>(false);
-  const [trainingMode, setTrainingMode] = useState<TrainingMode>('easy_20');
+  const [trainingMode, setTrainingMode] = useState<TrainingMode>('all_in_one_100');
   const [isConfirmingCancel, setIsConfirmingCancel] = useState<boolean>(false);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [expectedDataset, setExpectedDataset] = useState<GeneratedInvoiceData[]>([]);
@@ -410,10 +427,22 @@ export default function App() {
   const [lastCharacterValid, setLastCharacterValid] = useState<boolean | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Session stats lists
+  // Session stats & Strict Mistakes Rule tracking
   const [sessionResults, setSessionResults] = useState<TypingDetail[]>([]);
   const [correctCount, setCorrectCount] = useState<number>(0);
+  const [mistakesCount, setMistakesCount] = useState<number>(0);
+  const [mistakesList, setMistakesList] = useState<Array<{
+    cardIndex: number;
+    imageId: string;
+    category: TrainingCategory;
+    expectedNumber: string;
+    typedNumber: string;
+    timeSpentMs: number;
+  }>>([]);
   const [averageTimeMs, setAverageTimeMs] = useState<number>(0);
+  const [sessionTotalTimeMs, setSessionTotalTimeMs] = useState<number>(0);
+  const [showErrorReview, setShowErrorReview] = useState<boolean>(false);
+  const [latestEvaluation, setLatestEvaluation] = useState<AllInOneEvaluation | null>(null);
 
   // Page level display state managers
   const [testComplete, setTestComplete] = useState<boolean>(false);
@@ -730,9 +759,94 @@ export default function App() {
   }, [currentIndex, isTestActive]);
 
   /**
+   * Fisher-Yates algorithm for unbiased random shuffling of cards
+   */
+  function fisherYatesShuffle<T>(array: T[]): T[] {
+    const arr = [...array];
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  /**
+   * Aggregates all images/data across Tax Numbers, Date Numbers, and Phone Numbers,
+   * randomly shuffles them using Fisher-Yates, and selects exactly 100 cards for sequential training.
+   */
+  const startAllInOneTrainingSession = () => {
+    setActiveTrainingCategory('all_in_one');
+    setTrainingMode('all_in_one_100');
+    setCheatTriggerMsg(null);
+    setSaveError(null);
+
+    // 1. Gather all pool items across all 3 categories
+    const taxPool = customInvoices.filter(i => (i.category || 'tax_number') === 'tax_number');
+    const datePool = customInvoices.filter(i => i.category === 'date_number');
+    const phonePool = customInvoices.filter(i => i.category === 'phone_number');
+
+    const combinedPool: (GeneratedInvoiceData & { customImageUrl?: string })[] = [
+      ...taxPool,
+      ...datePool,
+      ...phonePool
+    ];
+
+    // Ensure a rich, diverse combined pool with at least 120 items across all three categories
+    let seedCount = 1;
+    while (combinedPool.length < 120) {
+      combinedPool.push(generateSampleCustomInvoice('tax_number', seedCount));
+      combinedPool.push(generateSampleCustomInvoice('date_number', seedCount));
+      combinedPool.push(generateSampleCustomInvoice('phone_number', seedCount));
+      seedCount++;
+    }
+
+    // 2. Fisher-Yates shuffle
+    const shuffled = fisherYatesShuffle(combinedPool);
+
+    // 3. Select exactly 100 cards
+    const deck100: (GeneratedInvoiceData & { customImageUrl?: string })[] = [];
+    for (let i = 0; i < 100; i++) {
+      const item = shuffled[i % shuffled.length];
+      deck100.push({
+        ...item,
+        id: `card_${i + 1}_${item.id}_${Math.random().toString(36).substring(2, 6)}`
+      });
+    }
+
+    setExpectedDataset(deck100);
+
+    // Map of image URLs
+    const urls: Record<string, string> = {};
+    deck100.forEach(item => {
+      urls[item.id] = item.customImageUrl || renderReceiptToDataUrl(item);
+    });
+    setImageUrls(urls);
+
+    setSessionResults([]);
+    setMistakesList([]);
+    setMistakesCount(0);
+    setCorrectCount(0);
+    setAverageTimeMs(0);
+    setSessionTotalTimeMs(0);
+    setCurrentIndex(0);
+    setTypedValue('');
+    setLastCharacterValid(null);
+    setTestComplete(false);
+    setIsConfirmingCancel(false);
+    setShowErrorReview(false);
+    setLatestEvaluation(null);
+    setIsTestActive(true);
+
+    // Preload next image
+    if (deck100.length > 1) {
+      const preloadImg = new Image();
+      preloadImg.src = urls[deck100[1].id];
+    }
+  };
+
+  /**
    * Initializes a speed testing session using the uploaded invoices library for a specific category.
-   * If fewer than the target count (180, 90, or 20) images exist in that category pool,
-   * automatically duplicates and shuffles existing images with unique runtime queue indices to form a seamless queue.
+   * (Maintained for Admin Sandbox testing).
    */
   const startCategoryTestingSession = (category: TrainingCategory, mode: TrainingMode = 'normal_90') => {
     setActiveTrainingCategory(category);
@@ -788,12 +902,16 @@ export default function App() {
     setImageUrls(urls);
     
     setSessionResults([]);
+    setMistakesList([]);
+    setMistakesCount(0);
     setCorrectCount(0);
     setAverageTimeMs(0);
+    setSessionTotalTimeMs(0);
     setCurrentIndex(0);
     setTypedValue('');
     setTestComplete(false);
     setIsConfirmingCancel(false);
+    setShowErrorReview(false);
     setIsTestActive(true);
 
     if (queue.length > 1) {
@@ -803,10 +921,14 @@ export default function App() {
   };
 
   /**
-   * Repeats the speed testing session while preserving the exact active category and training mode.
+   * Repeats the speed testing session. Defaults to All-In-One 100-Card session.
    */
   const handleRunAgain = () => {
-    startCategoryTestingSession(activeTrainingCategory, trainingMode);
+    if (activeTrainingCategory === 'all_in_one' || trainingMode === 'all_in_one_100') {
+      startAllInOneTrainingSession();
+    } else {
+      startCategoryTestingSession(activeTrainingCategory, trainingMode);
+    }
   };
 
   /**
@@ -1138,8 +1260,9 @@ export default function App() {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawVal = e.target.value;
     const currentInvoice = expectedDataset[currentIndex];
-    const category = currentInvoice?.category || activeTrainingCategory;
-    const expectedRaw = currentInvoice?.expectedNumber || '';
+    if (!currentInvoice) return;
+    const category: TrainingCategory = currentInvoice.category || 'tax_number';
+    const expectedRaw = currentInvoice.expectedNumber || '';
     const sanitizedExpected = expectedRaw.replace(/[^a-zA-Z0-9]/g, '');
 
     let cleaned = '';
@@ -1150,8 +1273,15 @@ export default function App() {
       const hasT = sanitizedExpected.toUpperCase().startsWith('T');
       const inputHasT = cleaned.startsWith('T');
       targetLength = (hasT && inputHasT) ? 14 : 13;
-    } else if (category === 'date_number' || category === 'phone_number') {
+    } else if (category === 'date_number') {
       cleaned = rawVal.replace(/\D/g, '');
+      targetLength = 8;
+    } else if (category === 'phone_number') {
+      cleaned = rawVal.replace(/\D/g, '');
+      const expDigits = sanitizedExpected.replace(/\D/g, '');
+      targetLength = expDigits.length || 10;
+    } else {
+      cleaned = rawVal.replace(/[^a-zA-Z0-9]/g, '');
       targetLength = sanitizedExpected.length;
     }
 
@@ -1182,7 +1312,19 @@ export default function App() {
   };
 
   /**
+   * Enter key triggers immediate submission
+   */
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && typedValue.length > 0) {
+      const currentInvoice = expectedDataset[currentIndex];
+      const category: TrainingCategory = currentInvoice?.category || 'tax_number';
+      verifyAndAdvanceSession(typedValue, category);
+    }
+  };
+
+  /**
    * Evaluates speed capture and writes entry metrics, then advances to next invoice.
+   * Tracks strict mistake rule (>2 errors = Disqualified/Fail).
    */
   const verifyAndAdvanceSession = (typedText: string, category: TrainingCategory) => {
     const endTimestamp = performance.now();
@@ -1223,9 +1365,22 @@ export default function App() {
     setSessionResults(nextResults);
 
     let nextCorrectCount = correctCount;
+    let nextMistakesCount = mistakesCount;
+
     if (isCorrect) {
       nextCorrectCount += 1;
       setCorrectCount(nextCorrectCount);
+    } else {
+      nextMistakesCount += 1;
+      setMistakesCount(nextMistakesCount);
+      setMistakesList(prev => [...prev, {
+        cardIndex: currentIndex + 1,
+        imageId: currentInvoice.id,
+        category,
+        expectedNumber: currentInvoice.expectedNumber,
+        typedNumber: typedText,
+        timeSpentMs: durationMs
+      }]);
     }
 
     setTypedValue('');
@@ -1234,7 +1389,7 @@ export default function App() {
     const nextIndex = currentIndex + 1;
 
     if (nextIndex >= expectedDataset.length) {
-      finalizeSessionLog(nextResults, nextCorrectCount, category);
+      finalizeSessionLog(nextResults, nextCorrectCount, nextMistakesCount, category);
     } else {
       setCurrentIndex(nextIndex);
       if (nextIndex + 1 < expectedDataset.length) {
@@ -1249,17 +1404,26 @@ export default function App() {
   };
 
   /**
-   * Finalizes score aggregation and saves payload to local storage and Supabase.
+   * Finalizes score aggregation, evaluates SLA ranking, and persists payload to 
+   * Supabase `training_sessions` table (and local storage).
    */
-  const finalizeSessionLog = async (completedResults: TypingDetail[], finalCorrect: number, category: TrainingCategory) => {
+  const finalizeSessionLog = async (
+    completedResults: TypingDetail[], 
+    finalCorrect: number, 
+    finalMistakes: number, 
+    category: TrainingCategory
+  ) => {
     setIsTestActive(false);
     setTestComplete(true);
 
     const totalMs = completedResults.reduce((acc, curr) => acc + curr.timeSpentMs, 0);
     const avgMs = completedResults.length > 0 ? Math.round(totalMs / completedResults.length) : 0;
     setAverageTimeMs(avgMs);
+    setSessionTotalTimeMs(totalMs);
 
-    const calculatedLevel = evaluateCategoryLevel(avgMs, category);
+    // Calculate official evaluation via evaluateAllInOneSession
+    const evaluation = evaluateAllInOneSession(avgMs, finalMistakes);
+    setLatestEvaluation(evaluation);
 
     setIsSaving(true);
     setSaveError(null);
@@ -1267,16 +1431,24 @@ export default function App() {
     const activeUserId = currentOfflineUser ? currentOfflineUser.username : 'guest';
     const accuracyPercent = completedResults.length > 0 ? Math.round((finalCorrect / completedResults.length) * 100) : 100;
     const avgSpeedSec = +(avgMs / 1000).toFixed(2);
+    const now = new Date();
+    const newSessionDocId = `session_${now.getTime()}`;
 
     const rawPayload = {
+      id: newSessionDocId,
       userId: activeUserId,
       operatorId: activeUserId,
       totalImagesAttempted: completedResults.length,
+      totalCards: completedResults.length,
       correctEntries: finalCorrect,
+      mistakesCount: finalMistakes,
+      isPassed: evaluation.isPassed,
+      status: evaluation.status,
       averageTimeMs: avgMs,
       averageSpeed: avgSpeedSec,
+      totalTimeMs: totalMs,
       accuracy: accuracyPercent,
-      level: calculatedLevel,
+      level: evaluation.level,
       trainingMode: trainingMode,
       category: category,
       details: completedResults.map(r => ({
@@ -1289,10 +1461,12 @@ export default function App() {
       }))
     };
 
-    const now = new Date();
-
-    // 1. Write to local storage
+    // 1. Write to local storage (both training_sessions and test_sessions cache)
     try {
+      const localAio = localStorage.getItem('local_training_sessions');
+      const prevAio = localAio ? JSON.parse(localAio) : [];
+      localStorage.setItem('local_training_sessions', JSON.stringify([{ ...rawPayload, timestamp: now.toISOString() }, ...prevAio]));
+
       const localData = localStorage.getItem('local_test_sessions');
       const prevList = localData ? JSON.parse(localData) : [];
       const localLogEntry = {
@@ -1304,24 +1478,49 @@ export default function App() {
       console.error('Failed writing locally:', err);
     }
 
-    // 2. Upload to Supabase
+    // 2. Upload to Supabase training_sessions table
     if (isSupabaseActive && currentOfflineUser && activeUserId !== 'sandbox_guest_uid') {
-      const newSessionDocId = `session_${now.getTime()}`;
-      const activeCategory = category;
+      try {
+        await supabase.from('training_sessions').insert([{
+          id: newSessionDocId,
+          user_id: activeUserId,
+          operator_id: activeUserId,
+          session_type: 'all_in_one',
+          training_mode: trainingMode,
+          category: category,
+          total_cards: completedResults.length,
+          total_attempted: completedResults.length,
+          correct_entries: finalCorrect,
+          mistakes_count: finalMistakes,
+          is_passed: evaluation.isPassed,
+          status: evaluation.status,
+          average_speed: avgSpeedSec,
+          average_time_ms: avgMs,
+          total_time_ms: totalMs,
+          speed_rank: evaluation.level,
+          level: evaluation.level,
+          accuracy: accuracyPercent,
+          details: completedResults,
+          created_at: now.toISOString()
+        }]);
+      } catch (err) {
+        console.warn('Notice saving session to training_sessions table:', err);
+      }
 
+      // Also persist to test_sessions table for backward compatibility
       try {
         await supabase.from('test_sessions').insert([{
           id: newSessionDocId,
           user_id: activeUserId,
           operator_id: activeUserId,
-          category: activeCategory,
+          category: category,
           training_mode: trainingMode,
           total_attempted: completedResults.length,
           correct_entries: finalCorrect,
           average_time_ms: avgMs,
           average_speed: avgSpeedSec,
           accuracy: accuracyPercent,
-          level: calculatedLevel,
+          level: evaluation.level,
           details: completedResults
         }]);
       } catch (err) {
@@ -1331,10 +1530,10 @@ export default function App() {
     }
 
     const completedSessionObj = {
-      id: `session_${now.getTime()}`,
+      id: newSessionDocId,
       ...rawPayload,
       timestamp: now,
-      level: calculatedLevel,
+      level: evaluation.level,
       category
     };
     setLatestSessionByMe(completedSessionObj);
@@ -1432,45 +1631,56 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-slate-100 text-slate-800 font-sans" id="speedtest-root">
       {/* 1. Global Navigation Bar */}
-      <header className="h-14 bg-slate-900 text-white flex items-center justify-between px-6 border-b border-slate-800 sticky top-0 z-30 shrink-0 select-none">
-        <div className="flex items-center gap-4">
-          <div className="bg-indigo-500 w-8 h-8 rounded flex items-center justify-center font-bold text-sm text-white shadow-lg">DT</div>
-          <h1 className="text-xs sm:text-sm font-semibold tracking-wide uppercase">
-            Data Entry Speed Assessment <span className="text-slate-400 font-normal ml-2 hidden md:inline">// Multi-Category Benchmark Node</span>
-          </h1>
+      <header className="h-14 bg-slate-900 text-white flex items-center justify-between px-4 sm:px-6 border-b border-slate-800 sticky top-0 z-30 shrink-0 select-none">
+        <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+          <div className="bg-indigo-500 w-8 h-8 rounded flex items-center justify-center font-bold text-sm text-white shadow-lg shrink-0">DT</div>
+          <div className="min-w-0">
+            <h1 className="text-xs sm:text-sm font-semibold tracking-wide truncate">
+              {t.appTitle}
+            </h1>
+            <p className="text-[10px] text-slate-400 hidden sm:block truncate">
+              {t.appTagline}
+            </p>
+          </div>
         </div>
         
-        {/* Auth status & Connection indicator */}
-        <div className="flex items-center gap-6 text-xs" id="authentication-widget">
-          <div className="flex flex-col items-end leading-none">
-            <span className="text-slate-400 uppercase tracking-tighter text-[9px] font-bold">Operator Profile</span>
+        {/* Auth status & Connection indicator & Language Switcher */}
+        <div className="flex items-center gap-2 sm:gap-4 md:gap-5 text-xs shrink-0" id="authentication-widget">
+          {/* Minimalist Language Switcher Icon Button */}
+          <LanguageSwitcher />
+
+          <div className="w-px h-7 bg-slate-700 hidden sm:block"></div>
+
+          <div className="hidden sm:flex flex-col items-end leading-none">
+            <span className="text-slate-400 uppercase tracking-tighter text-[9px] font-bold">{t.operatorProfile}</span>
             <span className="font-bold text-indigo-400 mt-1 flex items-center gap-1.5">
               {currentOfflineUser.username} 
               <span className="text-[8px] font-mono bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded uppercase border border-indigo-500/30">
-                {currentOfflineUser.role}
+                {currentOfflineUser.role === 'admin' ? t.adminBadge : currentOfflineUser.role}
               </span>
             </span>
           </div>
 
-          <div className="w-px h-8 bg-slate-700 hidden sm:block"></div>
+          <div className="w-px h-7 bg-slate-700 hidden md:block"></div>
 
-          <div className="hidden sm:flex flex-col items-end leading-none">
-            <span className="text-slate-400 uppercase tracking-tighter text-[9px] font-bold">System Status</span>
-            <span className={`font-medium mt-1 flex items-center gap-1 font-mono ${isSupabaseActive ? 'text-emerald-400' : 'text-amber-400'}`}>
-              {isSupabaseActive ? '● Supabase.Online' : '● Offline.Local'}
+          <div className="hidden md:flex flex-col items-end leading-none">
+            <span className="text-slate-400 uppercase tracking-tighter text-[9px] font-bold">{t.systemStatus}</span>
+            <span className={`font-medium mt-1 flex items-center gap-1 font-mono text-[11px] ${isSupabaseActive ? 'text-emerald-400' : 'text-amber-400'}`}>
+              {isSupabaseActive ? t.supabaseOnline : t.offlineLocal}
             </span>
           </div>
 
-          <div className="w-px h-8 bg-slate-700"></div>
+          <div className="w-px h-7 bg-slate-700"></div>
 
           <button
             onClick={handleOfflineLogout}
             className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white transition text-[11px] font-bold uppercase cursor-pointer shadow-sm flex items-center gap-1"
-            title="Log Out Workstation"
+            title={t.logout}
             id="logout-button"
+            aria-label={t.logout}
           >
             <LogOut className="w-3.5 h-3.5 text-white" />
-            <span className="hidden sm:inline">Logout</span>
+            <span className="hidden sm:inline">{t.logout}</span>
           </button>
         </div>
       </header>
@@ -1495,100 +1705,223 @@ export default function App() {
             {/* Guide & Category Workspace column */}
             <div className="lg:col-span-2 bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 flex flex-col justify-between shadow-sm animate-fade-in">
               <div className="space-y-6">
-                {/* Dynamic Configuration Navigation Tabs (3 Training Categories + Admin Users) */}
+                {/* Dynamic Configuration Navigation Tabs (Unified All-In-One + Admin Manager) */}
                 <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 font-sans mb-4" role="tablist" aria-label="Workstation setup categories">
                   <button
-                    onClick={() => { setActiveSetupTab('tax_number'); setUploadProgressError(null); }}
+                    onClick={() => { setActiveSetupTab('all_in_one'); setUploadProgressError(null); }}
                     role="tab"
-                    aria-selected={activeSetupTab === 'tax_number'}
-                    aria-label="Tax Number Training"
+                    aria-selected={activeSetupTab === 'all_in_one'}
+                    aria-label={t.allInOneSpeedTraining}
                     className={`pb-3 px-1 sm:px-3 text-xs font-bold uppercase tracking-wider border-b-2 cursor-pointer transition flex items-center gap-1.5 shrink-0 ${
-                      activeSetupTab === 'tax_number'
+                      activeSetupTab === 'all_in_one'
                         ? 'border-indigo-600 text-indigo-600 font-extrabold'
                         : 'border-transparent text-slate-400 hover:text-slate-600'
                     }`}
                   >
-                    <FileText className="w-3.5 h-3.5" />
-                    <span>🧾 Tax Number</span>
-                  </button>
-
-                  <button
-                    onClick={() => { setActiveSetupTab('date_number'); setUploadProgressError(null); }}
-                    role="tab"
-                    aria-selected={activeSetupTab === 'date_number'}
-                    aria-label="Date Number Training"
-                    className={`pb-3 px-1 sm:px-3 text-xs font-bold uppercase tracking-wider border-b-2 cursor-pointer transition flex items-center gap-1.5 shrink-0 ${
-                      activeSetupTab === 'date_number'
-                        ? 'border-indigo-600 text-indigo-600 font-extrabold'
-                        : 'border-transparent text-slate-400 hover:text-slate-600'
-                    }`}
-                  >
-                    <Calendar className="w-3.5 h-3.5" />
-                    <span>📅 Date Number</span>
-                  </button>
-
-                  <button
-                    onClick={() => { setActiveSetupTab('phone_number'); setUploadProgressError(null); }}
-                    role="tab"
-                    aria-selected={activeSetupTab === 'phone_number'}
-                    aria-label="Phone Number Training"
-                    className={`pb-3 px-1 sm:px-3 text-xs font-bold uppercase tracking-wider border-b-2 cursor-pointer transition flex items-center gap-1.5 shrink-0 ${
-                      activeSetupTab === 'phone_number'
-                        ? 'border-indigo-600 text-indigo-600 font-extrabold'
-                        : 'border-transparent text-slate-400 hover:text-slate-600'
-                    }`}
-                  >
-                    <Phone className="w-3.5 h-3.5" />
-                    <span>📞 Phone Number</span>
+                    <Zap className="w-3.5 h-3.5 text-indigo-600 fill-indigo-600" />
+                    <span>{t.allInOneSpeedTraining}</span>
                   </button>
 
                   {currentOfflineUser?.role === 'admin' && (
-                    <button
-                      onClick={() => { setActiveSetupTab('users'); setUploadProgressError(null); }}
-                      role="tab"
-                      aria-selected={activeSetupTab === 'users'}
-                      aria-label="Trainee User Accounts"
-                      className={`pb-3 px-1 sm:px-3 text-xs font-bold uppercase tracking-wider border-b-2 cursor-pointer transition flex items-center gap-1.5 shrink-0 ${
-                        activeSetupTab === 'users'
-                          ? 'border-indigo-600 text-indigo-600 font-extrabold'
-                          : 'border-transparent text-slate-400 hover:text-slate-600'
-                      }`}
-                    >
-                      <Users className="w-3.5 h-3.5" />
-                      <span>👥 Trainee User Accounts</span>
-                      <span className="ml-1 text-[9px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-bold uppercase">Admin</span>
-                    </button>
+                    <>
+                      <button
+                        onClick={() => { setActiveSetupTab('users'); setUploadProgressError(null); }}
+                        role="tab"
+                        aria-selected={activeSetupTab === 'users'}
+                        aria-label={t.traineeUserAccounts}
+                        className={`pb-3 px-1 sm:px-3 text-xs font-bold uppercase tracking-wider border-b-2 cursor-pointer transition flex items-center gap-1.5 shrink-0 ${
+                          activeSetupTab === 'users'
+                            ? 'border-indigo-600 text-indigo-600 font-extrabold'
+                            : 'border-transparent text-slate-400 hover:text-slate-600'
+                        }`}
+                      >
+                        <Users className="w-3.5 h-3.5" />
+                        <span>{t.traineeUserAccounts}</span>
+                        <span className="ml-1 text-[9px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-bold uppercase">{t.adminBadge}</span>
+                      </button>
+
+                      <button
+                        onClick={() => { setActiveSetupTab('catalog'); setUploadProgressError(null); }}
+                        role="tab"
+                        aria-selected={activeSetupTab === 'catalog'}
+                        aria-label={t.categoryImageCatalog}
+                        className={`pb-3 px-1 sm:px-3 text-xs font-bold uppercase tracking-wider border-b-2 cursor-pointer transition flex items-center gap-1.5 shrink-0 ${
+                          activeSetupTab === 'catalog'
+                            ? 'border-indigo-600 text-indigo-600 font-extrabold'
+                            : 'border-transparent text-slate-400 hover:text-slate-600'
+                        }`}
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>{t.categoryImageCatalog}</span>
+                        <span className="ml-1 text-[9px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-bold uppercase">{t.adminBadge}</span>
+                      </button>
+                    </>
                   )}
                 </div>
 
-                {/* Tab 1, 2, 3: Category Sandbox Workspaces */}
-                {activeSetupTab === 'tax_number' || activeSetupTab === 'date_number' || activeSetupTab === 'phone_number' ? (
-                  <Suspense fallback={<LoadingFallback message="Loading invoice training sandbox..." className="p-12 min-h-[320px]" />}>
-                    <CategorySandbox
-                      category={activeSetupTab}
-                      invoices={customInvoices.filter(i => (i.category || 'tax_number') === activeSetupTab)}
-                      allInvoices={customInvoices}
-                      onUploadImages={handleCustomImagesUpload}
-                      onAddSample={handleAddSampleToCustomList}
-                      onDeleteInvoice={handleDeleteCustomInvoice}
-                      onUpdateCode={updateCustomInvoiceCode}
-                      onUpdateCompany={updateCustomInvoiceCompany}
-                      onClearPool={handleClearCategoryPool}
-                      onOpenLabelingModal={(idx) => setLabelingModalIndex(idx)}
-                      onStartTest={startCategoryTestingSession}
-                      uploadProgressError={uploadProgressError}
-                      customExpectedCode={customExpectedCode}
-                      setCustomExpectedCode={setCustomExpectedCode}
-                      customCompanyName={customCompanyName}
-                      setCustomCompanyName={setCustomCompanyName}
-                      isAdmin={currentOfflineUser?.role === 'admin'}
-                      onRefreshPool={() => fetchCustomInvoices(true)}
-                      isRefreshingPool={isRefreshingInvoices}
-                      onCategoryChange={(cat) => setActiveSetupTab(cat)}
-                    />
-                  </Suspense>
-                ) : (
-                  /* Tab 4: Trainee Accounts Management Tab (Admin Only) */
+                {/* Tab 1: Unified All-In-One Speed Training View */}
+                {activeSetupTab === 'all_in_one' && (
+                  <div className="space-y-6 animate-fade-in" id="all-in-one-training-view">
+                    {/* Hero Launch Card */}
+                    <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-900 text-white rounded-2xl p-6 sm:p-7 border border-indigo-500/30 shadow-xl relative overflow-hidden">
+                      <div className="absolute top-0 right-0 p-8 select-none pointer-events-none opacity-5 text-indigo-400">
+                        <Zap className="w-72 h-72" />
+                      </div>
+
+                      <div className="relative z-10 space-y-5">
+                        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                          <div className="space-y-1.5 max-w-xl">
+                            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-extrabold bg-indigo-500/20 text-indigo-300 border border-indigo-400/30">
+                              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Unified 100-Card Random Assessment</span>
+                            </div>
+                            <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-white flex items-center gap-2">
+                              All-In-One Speed Training
+                            </h2>
+                            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed font-sans">
+                              Combines Japanese Qualified Tax Numbers (T+13), 8-digit Dates (YYYYMMDD), and Telephone Contacts into a continuous 100-card sequence. Evaluated with strict accuracy rules and SLA tier targets.
+                            </p>
+                          </div>
+
+                          {/* Instant Start Training Trigger Button */}
+                          <button
+                            onClick={startAllInOneTrainingSession}
+                            id="btn-start-all-in-one"
+                            className="w-full md:w-auto px-7 py-4.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-400 text-white rounded-2xl font-black text-sm sm:text-base tracking-wider uppercase shadow-xl hover:shadow-emerald-500/30 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2.5 cursor-pointer shrink-0 border border-emerald-300/40"
+                          >
+                            <Play className="w-5 h-5 fill-white" />
+                            <span>Start Training (100 Cards)</span>
+                          </button>
+                        </div>
+
+                        {/* Deck composition counts */}
+                        <div className="pt-4 border-t border-indigo-800/60 grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs font-mono">
+                          <div className="bg-slate-800/80 border border-indigo-500/20 p-2.5 rounded-xl">
+                            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">🧾 Tax Numbers</span>
+                            <span className="text-base font-bold text-white">
+                              {customInvoices.filter(i => (i.category || 'tax_number') === 'tax_number').length} loaded
+                            </span>
+                          </div>
+                          <div className="bg-slate-800/80 border border-indigo-500/20 p-2.5 rounded-xl">
+                            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">📅 Date Numbers</span>
+                            <span className="text-base font-bold text-white">
+                              {customInvoices.filter(i => i.category === 'date_number').length} loaded
+                            </span>
+                          </div>
+                          <div className="bg-slate-800/80 border border-indigo-500/20 p-2.5 rounded-xl">
+                            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">📞 Phone Numbers</span>
+                            <span className="text-base font-bold text-white">
+                              {customInvoices.filter(i => i.category === 'phone_number').length} loaded
+                            </span>
+                          </div>
+                          <div className="bg-emerald-950/70 border border-emerald-500/40 p-2.5 rounded-xl">
+                            <span className="text-emerald-300 text-[10px] uppercase font-sans block font-semibold">🎴 Shuffled Pool</span>
+                            <span className="text-base font-bold text-emerald-400">100 Cards Exact</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Operational Criteria & Standards Matrix */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Strict Accuracy Rule Card */}
+                      <div className="bg-rose-50/70 border border-rose-200 rounded-2xl p-4.5 space-y-2">
+                        <div className="flex items-center gap-2 text-rose-800 font-extrabold text-xs uppercase tracking-wider">
+                          <ShieldAlert className="w-4 h-4 text-rose-600" />
+                          <span>Strict Accuracy Rule (Max 2 Mistakes)</span>
+                        </div>
+                        <p className="text-xs text-rose-900 leading-relaxed font-sans">
+                          Maximum allowable mistakes across the 100 cards is <strong>2 errors</strong>. If typos exceed 2, the status is marked as <strong className="text-rose-700 underline">FAIL (Disqualified)</strong> even if your typing speed achieves Level A or B!
+                        </p>
+                        <div className="flex items-center gap-2 pt-1 font-mono text-[11px] text-rose-700">
+                          <span className="bg-white px-2 py-0.5 rounded border border-rose-200 font-bold">≤ 2 mistakes = Eligible</span>
+                          <span className="bg-rose-200/60 px-2 py-0.5 rounded font-bold text-rose-800">&gt; 2 mistakes = FAIL</span>
+                        </div>
+                      </div>
+
+                      {/* Speed Ranking Tier Card */}
+                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4.5 space-y-2">
+                        <div className="flex items-center gap-2 text-slate-800 font-extrabold text-xs uppercase tracking-wider">
+                          <Trophy className="w-4 h-4 text-indigo-600" />
+                          <span>Speed Ranking Evaluation Standards</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                          <div className="bg-white p-2 rounded-lg border border-emerald-200 text-emerald-800">
+                            <strong className="block text-emerald-700">Level A: ≤ 2.3s</strong>
+                            <span className="text-[10px] text-slate-500 font-sans">Elite Expert pace</span>
+                          </div>
+                          <div className="bg-white p-2 rounded-lg border border-indigo-200 text-indigo-800">
+                            <strong className="block text-indigo-700">Level B: 2.4s ~ 2.5s</strong>
+                            <span className="text-[10px] text-slate-500 font-sans">Specialist pace</span>
+                          </div>
+                          <div className="bg-white p-2 rounded-lg border border-amber-200 text-amber-800">
+                            <strong className="block text-amber-700">Level C: 2.6s ~ 3.0s</strong>
+                            <span className="text-[10px] text-slate-500 font-sans">Qualified standard</span>
+                          </div>
+                          <div className="bg-white p-2 rounded-lg border border-blue-200 text-blue-800">
+                            <strong className="block text-blue-700">Level D: 3.0s ~ 3.2s</strong>
+                            <span className="text-[10px] text-slate-500 font-sans">Practitioner pace</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Unlimited Attempts & Concurrency Banner */}
+                    <div className="bg-slate-900 text-slate-200 p-4 rounded-xl border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-xs">
+                      <div className="flex items-center gap-2 text-indigo-300">
+                        <Zap className="w-4 h-4 text-indigo-400 shrink-0" />
+                        <span><strong>Unlimited Attempts:</strong> No operator session caps. Supporting 50+ concurrent classroom stations smoothly.</span>
+                      </div>
+                      <button
+                        onClick={startAllInOneTrainingSession}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-xs uppercase tracking-wider cursor-pointer transition shrink-0"
+                      >
+                        Launch 100-Card Run ➔
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tab 2: Admin Card Pools & Sandbox Manager */}
+                {activeSetupTab === 'catalog' && currentOfflineUser?.role === 'admin' && (
+                  <div className="space-y-4 animate-fade-in" id="admin-pool-catalog-tab">
+                    <div className="space-y-1">
+                      <h2 className="text-xl font-extrabold text-slate-800 flex items-center gap-2">
+                        🗂️ Card Pools & Sandbox Manager
+                      </h2>
+                      <p className="text-slate-500 text-xs">
+                        Administrator access: Upload custom receipts, export/restore ZIP backups, download CSV templates, or edit label ground truth.
+                      </p>
+                    </div>
+
+                    <Suspense fallback={<LoadingFallback message="Loading invoice training sandbox..." className="p-12 min-h-[320px]" />}>
+                      <CategorySandbox
+                        category="tax_number"
+                        invoices={customInvoices}
+                        allInvoices={customInvoices}
+                        onUploadImages={handleCustomImagesUpload}
+                        onAddSample={handleAddSampleToCustomList}
+                        onDeleteInvoice={handleDeleteCustomInvoice}
+                        onUpdateCode={updateCustomInvoiceCode}
+                        onUpdateCompany={updateCustomInvoiceCompany}
+                        onClearPool={handleClearCategoryPool}
+                        onOpenLabelingModal={(idx) => setLabelingModalIndex(idx)}
+                        onStartTest={startCategoryTestingSession}
+                        uploadProgressError={uploadProgressError}
+                        customExpectedCode={customExpectedCode}
+                        setCustomExpectedCode={setCustomExpectedCode}
+                        customCompanyName={customCompanyName}
+                        setCustomCompanyName={setCustomCompanyName}
+                        isAdmin={true}
+                        onRefreshPool={() => fetchCustomInvoices(true)}
+                        isRefreshingPool={isRefreshingInvoices}
+                      />
+                    </Suspense>
+                  </div>
+                )}
+
+                {/* Tab 3: Trainee Accounts Management Tab (Admin Only) */}
+                {activeSetupTab === 'users' && currentOfflineUser?.role === 'admin' && (
                   <div className="space-y-6 animate-fade-in" id="admin-user-management-tab">
                     <div className="space-y-1">
                       <h2 className="text-xl font-extrabold text-slate-800 flex items-center gap-2">
@@ -1925,365 +2258,490 @@ export default function App() {
         )}
 
         {/* B. ACTIVE WORKSTATION SESSION RUNNING */}
-        {isTestActive && expectedDataset[currentIndex] && (
-          <div className="space-y-6 animate-fade-in" id="active-test-container">
-            {/* Real-time stats header banner */}
-            <Suspense fallback={<LoadingFallback message="Loading performance telemetry..." className="p-4 min-h-[90px]" />}>
-              <StatsPanel
-                currentIndex={currentIndex}
-                totalCount={expectedDataset.length}
-                correctCount={correctCount}
-                elapsedMs={elapsedMs}
-                averageTimeMs={
-                  sessionResults.length > 0 
-                    ? Math.round(sessionResults.reduce((sum, r) => sum + r.timeSpentMs, 0) / sessionResults.length) 
-                    : 0
-                }
-                isTestActive={true}
-                trainingMode={trainingMode}
-                category={activeTrainingCategory}
-              />
-            </Suspense>
+        {isTestActive && expectedDataset[currentIndex] && (() => {
+          const currentInvoice = expectedDataset[currentIndex];
+          const cardCategory = currentInvoice.category || 'tax_number';
+          const targetLength = cardCategory === 'date_number' 
+            ? 8 
+            : cardCategory === 'phone_number' 
+            ? (currentInvoice.expectedNumber.replace(/\D/g, '').length || 10) 
+            : (currentInvoice.expectedNumber.startsWith('T') && typedValue.startsWith('T') ? 14 : 13);
 
-            {/* Split Screen Layout */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-              {/* Left Column: Image Scan Workstation */}
-              <div className="lg:col-span-7">
-                <Suspense fallback={<LoadingFallback message="Loading invoice scanner..." className="p-12 min-h-[420px]" />}>
-                  <InvoiceViewer
-                    currentInvoice={expectedDataset[currentIndex]}
-                    onImageLoaded={handleInvoiceImageOnLoad}
-                    isLoading={false}
-                  />
-                </Suspense>
-              </div>
+          return (
+            <div className="space-y-6 animate-fade-in" id="active-test-container">
+              {/* Real-time stats header banner */}
+              <Suspense fallback={<LoadingFallback message="Loading performance telemetry..." className="p-4 min-h-[90px]" />}>
+                <StatsPanel
+                  currentIndex={currentIndex}
+                  totalCount={expectedDataset.length}
+                  correctCount={correctCount}
+                  mistakesCount={mistakesCount}
+                  elapsedMs={elapsedMs}
+                  averageTimeMs={
+                    sessionResults.length > 0 
+                      ? Math.round(sessionResults.reduce((sum, r) => sum + r.timeSpentMs, 0) / sessionResults.length) 
+                      : 0
+                  }
+                  isTestActive={true}
+                  trainingMode={trainingMode}
+                  category={activeTrainingCategory}
+                />
+              </Suspense>
 
-              {/* Right Column: Key Entry Node */}
-              <div className="lg:col-span-5 flex flex-col justify-between bg-white border border-slate-200 rounded-2xl p-6 shadow-sm relative overflow-hidden">
-                <div className="space-y-6">
-                  {/* Title card */}
-                  <div className="flex justify-between items-start gap-4">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                          Data Entry Port
-                        </h3>
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100 uppercase">
-                          {activeTrainingCategory === 'date_number' ? 'Date Entry' : activeTrainingCategory === 'phone_number' ? 'Phone Entry' : 'Tax Code Entry'}
-                        </span>
+              {/* Split Screen Layout */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+                {/* Left Column: Image Scan Workstation */}
+                <div className="lg:col-span-7">
+                  <Suspense fallback={<LoadingFallback message="Loading invoice scanner..." className="p-12 min-h-[420px]" />}>
+                    <InvoiceViewer
+                      currentInvoice={currentInvoice}
+                      onImageLoaded={handleInvoiceImageOnLoad}
+                      isLoading={false}
+                    />
+                  </Suspense>
+                </div>
+
+                {/* Right Column: Key Entry Node */}
+                <div className="lg:col-span-5 flex flex-col justify-between bg-white border border-slate-200 rounded-2xl p-6 shadow-sm relative overflow-hidden">
+                  <div className="space-y-6">
+                    {/* Title card with Real-Time Card Index Indicator & Mistake Counter */}
+                    <div className="flex justify-between items-start gap-3 flex-wrap">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-1 rounded-xl font-mono shadow-2xs">
+                            Card {currentIndex + 1} / {expectedDataset.length}
+                          </span>
+                          <span className="text-[10px] font-extrabold px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 uppercase tracking-wider">
+                            {cardCategory === 'date_number' ? '📅 Date (YYYYMMDD)' : cardCategory === 'phone_number' ? '📞 Phone Digits' : '🧾 Tax No (T+13)'}
+                          </span>
+                        </div>
+
+                        {/* Mistakes status indicator */}
+                        <div className="flex items-center gap-1.5 pt-0.5">
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-mono font-bold border ${
+                            mistakesCount === 0
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : mistakesCount <= 2
+                              ? 'bg-amber-50 text-amber-800 border-amber-300'
+                              : 'bg-rose-100 text-rose-800 border-rose-300 animate-pulse font-black'
+                          }`}>
+                            <AlertCircle className="w-3 h-3" />
+                            <span>Mistakes: {mistakesCount} / 2 allowed {mistakesCount > 2 ? '⚠️ FAIL (Disqualified)' : ''}</span>
+                          </span>
+                        </div>
                       </div>
-                      <p className="text-[11px] text-slate-500 mt-1 uppercase font-mono tracking-wider">
-                        Target ID: {expectedDataset[currentIndex].id.toUpperCase()} Scan 
+
+                      {!isConfirmingCancel ? (
+                        <button
+                          onClick={() => setIsConfirmingCancel(true)}
+                          aria-label="Abort testing session"
+                          className="px-3 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200 hover:border-rose-300 rounded-lg text-xs font-bold tracking-wider uppercase cursor-pointer transition"
+                          id="abort-session-btn"
+                        >
+                          Cancel
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Abort?</span>
+                          <button
+                            onClick={handleCancelTestingSession}
+                            aria-label="Confirm aborting current typing session"
+                            className="px-2 py-1 bg-red-600 text-white hover:bg-red-700 rounded text-xs font-bold uppercase cursor-pointer transition shrink-0"
+                            id="confirm-abort-btn"
+                          >
+                            Yes
+                          </button>
+                          <button
+                            onClick={() => setIsConfirmingCancel(false)}
+                            aria-label="Dismiss and continue typing session"
+                            className="px-2 py-1 bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200 rounded text-xs font-bold uppercase cursor-pointer transition shrink-0"
+                            id="cancel-abort-btn"
+                          >
+                            No
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Visual stream progress line */}
+                    <div className="-mt-2">
+                      <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                        <div 
+                          className="bg-gradient-to-r from-indigo-500 to-teal-500 h-2 transition-all duration-200"
+                          style={{ width: `${((currentIndex + 1) / expectedDataset.length) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Typing form input container */}
+                    <div className="space-y-3 relative">
+                      <label htmlFor="numeric-speed-input" className="block text-xs font-bold text-slate-700 uppercase tracking-widest">
+                        {cardCategory === 'date_number' 
+                          ? '8-Digit Date (YYYYMMDD)' 
+                          : cardCategory === 'phone_number' 
+                          ? 'Phone Digits (Numbers only)' 
+                          : 'Tax Number (T + 13 Digits)'}
+                      </label>
+
+                      {/* Alphanumeric / Numeric Text Field */}
+                      <div className="relative">
+                        <input
+                          id="numeric-speed-input"
+                          ref={inputRef}
+                          type="text"
+                          value={typedValue}
+                          onChange={handleInputChange}
+                          onKeyDown={handleInputKeyDown}
+                          onPaste={handlePastePrevent}
+                          onCopy={handleCopyPrevent}
+                          autoComplete="off"
+                          autoCapitalize="characters"
+                          spellCheck={false}
+                          placeholder={
+                            cardCategory === 'date_number' ? 'YYYYMMDD (e.g. 20260522)' :
+                            cardCategory === 'phone_number' ? '03... / 090...' :
+                            'T... or 13 digits'
+                          }
+                          className={`w-full py-4 px-5 text-center text-3xl font-bold tracking-[0.2em] font-mono text-slate-800 placeholder:text-slate-300 bg-slate-50 border focus:ring-4 outline-none rounded-xl transition ${
+                            lastCharacterValid === true ? 'border-emerald-500 focus:ring-emerald-50 bg-emerald-50/10 text-emerald-800' : 
+                            lastCharacterValid === false ? 'border-rose-500 focus:ring-rose-50 bg-rose-50/10 text-rose-800' : 'border-slate-250 focus:ring-indigo-100'
+                          }`}
+                        />
+
+                        {/* Character count ticks */}
+                        <div className="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 flex items-center justify-center">
+                          <span className="text-[11px] font-bold font-mono text-slate-400 bg-white border border-slate-205 px-1.5 py-0.5 rounded tracking-wide">
+                            {typedValue.length} / {targetLength}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Visual tick ribbon */}
+                      <div className="flex justify-center space-x-1 h-1.5">
+                        {Array.from({ length: targetLength }).map((_, idx) => {
+                          let dotColor = 'bg-slate-100 border border-slate-200';
+                          if (idx < typedValue.length) {
+                            if (lastCharacterValid === false && idx === typedValue.length - 1) {
+                              dotColor = 'bg-rose-500';
+                            } else {
+                              dotColor = 'bg-indigo-600';
+                            }
+                          }
+                          return (
+                            <div 
+                              key={idx} 
+                              className={`w-3 h-1.5 rounded-full transition-colors ${dotColor}`} 
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Entry specifications card */}
+                    <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-150 space-y-1.5 text-xs text-slate-500">
+                      <span className="text-[10px] uppercase font-bold tracking-widest text-slate-600 block">
+                        Quick Entry Rules:
+                      </span>
+                      <ul className="space-y-1 text-[11px] leading-relaxed list-disc list-inside">
+                        {cardCategory === 'date_number' ? (
+                          <li>Enter 8 digits as <strong className="text-slate-800 font-mono">YYYYMMDD</strong> (auto-advances upon 8th digit).</li>
+                        ) : cardCategory === 'phone_number' ? (
+                          <li>Enter telephone digits only (strictly retains leading 0).</li>
+                        ) : (
+                          <li>Type <strong className="text-slate-800 font-mono">T + 13 digits</strong> or enter just the 13 numbers.</li>
+                        )}
+                        <li>Press <strong className="text-slate-700 font-bold">Enter</strong> anytime to submit immediately.</li>
+                        <li>Click outside? Click <button onClick={() => inputRef.current?.focus()} className="text-indigo-600 hover:text-indigo-500 underline cursor-pointer font-bold">Refocus Input</button>.</li>
+                      </ul>
+                    </div>
+                  </div>
+
+                  {/* Left Time threshold bar */}
+                  <div className="mt-6 border-t border-slate-150 pt-3 flex justify-between items-center text-slate-500 text-[11px] font-mono">
+                    <span>Card {currentIndex + 1} of 100</span>
+                    <span className={elapsedMs > 2300 ? 'text-rose-600 font-bold' : 'text-indigo-600 font-bold'}>
+                      Pace: {(elapsedMs / 1000).toFixed(2)}s / card (Target ≤ 2.3s)
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* C. WORKSHEET TEST COMPLETE - CLEAN RESULT SUMMARY MODAL */}
+        {testComplete && (() => {
+          const evalResult = latestEvaluation || evaluateAllInOneSession(averageTimeMs, mistakesCount);
+          const totalSec = Math.floor(sessionTotalTimeMs / 1000);
+          const formattedTotalTime = formatMinutesSeconds(sessionTotalTimeMs);
+          const avgPaceSec = +(averageTimeMs / 1000).toFixed(2);
+          const accuracyPct = expectedDataset.length > 0 ? Math.round((correctCount / expectedDataset.length) * 100) : 100;
+
+          return (
+            <div className="space-y-6 animate-fade-in" id="results-display-screen">
+              {/* Main Result Summary Modal Card */}
+              <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-10 shadow-xl relative overflow-hidden animate-fade-in">
+                <div className="absolute top-0 right-0 p-10 select-none pointer-events-none opacity-[0.03] text-indigo-600">
+                  <Trophy className="w-96 h-96" />
+                </div>
+
+                <div className="relative z-10 space-y-8">
+                  {/* Top Status & Speed Rank Header */}
+                  <div className="flex flex-col md:flex-row gap-6 items-start md:items-center justify-between pb-6 border-b border-slate-200">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        {/* 1. Status Badge: PASSED (Green) or FAILED (Red) */}
+                        {evalResult.isPassed ? (
+                          <div className="px-5 py-2 rounded-full font-black text-sm uppercase tracking-wider bg-emerald-600 text-white shadow-lg shadow-emerald-600/25 flex items-center gap-2 border border-emerald-400">
+                            <Check className="w-5 h-5 stroke-[3]" />
+                            <span>STATUS: PASSED</span>
+                          </div>
+                        ) : (
+                          <div className="px-5 py-2 rounded-full font-black text-sm uppercase tracking-wider bg-rose-600 text-white shadow-lg shadow-rose-600/25 flex items-center gap-2 border border-rose-400">
+                            <X className="w-5 h-5 stroke-[3]" />
+                            <span>STATUS: FAILED</span>
+                          </div>
+                        )}
+
+                        {/* 2. Speed Rank Badge */}
+                        <div className={`px-4 py-2 rounded-full text-xs font-black uppercase tracking-wider border shadow-xs flex items-center gap-1.5 ${evalResult.levelBadgeClass}`}>
+                          <Trophy className="w-4 h-4" />
+                          <span>{evalResult.levelName}</span>
+                        </div>
+                      </div>
+
+                      <h2 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tight mt-1">
+                        {t.resultsTitle}
+                      </h2>
+                      <p className={`text-xs font-bold ${evalResult.isPassed ? 'text-emerald-700' : 'text-rose-600'}`}>
+                        {evalResult.isPassed 
+                          ? t.passedNotice 
+                          : (mistakesCount > 2 ? t.failedNoticeMistakes : t.failedNoticeSpeed)}
                       </p>
                     </div>
-                    {!isConfirmingCancel ? (
+
+                    {/* Action Buttons: Try Again & View Dashboard */}
+                    <div className="flex flex-wrap gap-2.5 w-full md:w-auto">
                       <button
-                        onClick={() => setIsConfirmingCancel(true)}
-                        aria-label="Abort testing session"
-                        className="px-3 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200 hover:border-rose-300 rounded-lg text-xs font-bold tracking-wider uppercase cursor-pointer transition"
-                        id="abort-session-btn"
+                        onClick={handleRunAgain}
+                        id="btn-try-again"
+                        className="flex-1 sm:flex-none px-6 py-3.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white rounded-xl font-black transition flex items-center justify-center gap-2 shadow-md cursor-pointer text-xs uppercase tracking-wider"
                       >
-                        Cancel
+                        <RotateCcw className="w-4 h-4" />
+                        <span>{t.tryAgainBtn}</span>
                       </button>
-                    ) : (
+
+                      <button
+                        onClick={() => {
+                          setTestComplete(false);
+                          setIsTestActive(false);
+                        }}
+                        id="btn-view-dashboard"
+                        className="flex-1 sm:flex-none px-6 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-bold transition flex items-center justify-center border border-slate-300 gap-1.5 cursor-pointer text-xs uppercase tracking-wider"
+                      >
+                        <BarChart2 className="w-4 h-4 text-slate-600" />
+                        <span>{t.viewDashboardBtn}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 5-Metric Summary Cards Grid */}
+                  <div className="grid grid-cols-2 lg:grid-cols-5 gap-3.5 font-mono">
+                    {/* Metric 1: Status */}
+                    <div className={`p-4 rounded-2xl border ${evalResult.isPassed ? 'bg-emerald-50/70 border-emerald-200' : 'bg-rose-50/70 border-rose-200'}`}>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block font-sans">{language === 'my' ? 'ရလဒ် အခြေအနေ' : 'Qualification'}</span>
+                      <span className={`text-xl font-black mt-1 block ${evalResult.isPassed ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        {evalResult.isPassed ? (language === 'my' ? 'အောင်မြင် (PASS)' : 'PASSED') : (language === 'my' ? 'မအောင်မြင် (FAIL)' : 'FAILED')}
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-sans block mt-0.5">
+                        {evalResult.isPassed ? (language === 'my' ? 'အမှား ≤ ၂ ခုနှင့် စံချိန်မီ' : '≤ 2 errors & qualified pace') : (evalResult.mistakesCount > 2 ? (language === 'my' ? 'အမှား ၂ ခုထက်ပို၍ မအောင်မြင်' : 'Disqualified (>2 errors)') : (language === 'my' ? 'စံချိန်မမီပါ' : 'Exceeded pace target'))}
+                      </span>
+                    </div>
+
+                    {/* Metric 2: Speed Rank */}
+                    <div className="p-4 rounded-2xl border bg-slate-50 border-slate-200">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block font-sans">{t.rankBadgeLabel}</span>
+                      <span className="text-xl font-black text-indigo-700 mt-1 block">
+                        {evalResult.level === 'FAILED' ? (language === 'my' ? 'လေ့ကျင့်ရန်လို' : 'Needs Practice') : `Level ${evalResult.level}`}
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-sans block mt-0.5">
+                        {evalResult.speedRange}
+                      </span>
+                    </div>
+
+                    {/* Metric 3: Average Speed */}
+                    <div className="p-4 rounded-2xl border bg-slate-50 border-slate-200">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block font-sans">{t.averageSpeedLabel}</span>
+                      <span className="text-xl font-black text-slate-800 mt-1 block">
+                        {avgPaceSec}s <span className="text-xs text-slate-400 font-normal">/ {language === 'my' ? 'ကတ်' : 'card'}</span>
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-sans block mt-0.5">
+                        {language === 'my' ? 'Level A စံချိန် ≤ ၂.၃ စက္ကန့်' : 'Target ≤ 2.3s for Level A'}
+                      </span>
+                    </div>
+
+                    {/* Metric 4: Total Time */}
+                    <div className="p-4 rounded-2xl border bg-slate-50 border-slate-200">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block font-sans">{t.totalTimeLabel}</span>
+                      <span className="text-xl font-black text-slate-800 mt-1 block">
+                        {formattedTotalTime}
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-sans block mt-0.5">
+                        {language === 'my' ? `ကတ် ${expectedDataset.length} ခု စုစုပေါင်း` : `Across ${expectedDataset.length} cards`}
+                      </span>
+                    </div>
+
+                    {/* Metric 5: Mistakes Count */}
+                    <div className={`p-4 rounded-2xl border col-span-2 lg:col-span-1 ${mistakesCount > 2 ? 'bg-rose-50 border-rose-300' : 'bg-slate-50 border-slate-200'}`}>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block font-sans">{t.mistakesCountLabel}</span>
+                      <span className={`text-xl font-black mt-1 block ${mistakesCount > 2 ? 'text-rose-700' : mistakesCount === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
+                        {mistakesCount} / {expectedDataset.length}
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-sans block mt-0.5">
+                        {language === 'my' ? `အများဆုံး ၂ ကြိမ်ခွင့်ပြု (${accuracyPct}% တိကျမှု)` : `Max 2 allowed (${accuracyPct}% accuracy)`}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Error Review Toggle Section */}
+                  <div className="border border-slate-200 rounded-2xl p-4 bg-slate-50 space-y-3">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Abort test?</span>
-                        <button
-                          onClick={handleCancelTestingSession}
-                          aria-label="Confirm aborting current typing session"
-                          className="px-2.5 py-1 bg-red-600 text-white hover:bg-red-700 rounded text-xs font-bold tracking-wider uppercase cursor-pointer transition shrink-0"
-                          id="confirm-abort-btn"
-                        >
-                          Yes, Abort
-                        </button>
-                        <button
-                          onClick={() => setIsConfirmingCancel(false)}
-                          aria-label="Dismiss and continue typing session"
-                          className="px-2 py-1 bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200 rounded text-xs font-bold tracking-wider uppercase cursor-pointer transition shrink-0"
-                          id="cancel-abort-btn"
-                        >
-                          No
-                        </button>
+                        <AlertCircle className={`w-4 h-4 ${mistakesList.length > 0 ? 'text-amber-600' : 'text-emerald-600'}`} />
+                        <span className="text-xs font-black uppercase tracking-wider text-slate-800 font-sans">
+                          Mistake Audit Trail ({mistakesList.length} Errors Found)
+                        </span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowErrorReview(!showErrorReview)}
+                        className="px-3.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold cursor-pointer transition shadow-2xs font-sans"
+                      >
+                        {showErrorReview ? '▲ Hide Error Review' : `🔍 Show Error Review (${mistakesList.length})`}
+                      </button>
+                    </div>
+
+                    {showErrorReview && (
+                      <div className="pt-2 animate-fade-in">
+                        {mistakesList.length === 0 ? (
+                          <div className="p-4 bg-emerald-100/70 border border-emerald-300 rounded-xl text-xs font-bold text-emerald-900 font-sans flex items-center gap-2">
+                            <Check className="w-4 h-4 text-emerald-700 stroke-[3]" />
+                            <span>100% Perfect Accuracy! Zero mistyped cards across all 100 entries.</span>
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                            <table className="w-full text-left text-xs border-collapse font-mono">
+                              <thead>
+                                <tr className="bg-slate-100/80 text-slate-600 font-bold uppercase tracking-wider border-b border-slate-200 text-[10px]">
+                                  <th className="p-3">Card #</th>
+                                  <th className="p-3">Category</th>
+                                  <th className="p-3">Expected Target</th>
+                                  <th className="p-3 text-rose-600">Your Typed Value</th>
+                                  <th className="p-3">Elapsed Time</th>
+                                  <th className="p-3 text-right">Error Result</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-150">
+                                {mistakesList.map((m, idx) => (
+                                  <tr key={idx} className="hover:bg-rose-50/30 transition">
+                                    <td className="p-3 font-bold text-indigo-700">Card #{m.cardIndex}</td>
+                                    <td className="p-3 font-sans">
+                                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 uppercase">
+                                        {m.category === 'date_number' ? '📅 Date' : m.category === 'phone_number' ? '📞 Phone' : '🧾 Tax No'}
+                                      </span>
+                                    </td>
+                                    <td className="p-3 font-bold text-emerald-700 bg-emerald-50/30">{m.expectedNumber}</td>
+                                    <td className="p-3 font-bold text-rose-600 bg-rose-50/50">
+                                      {m.typedNumber || <span className="italic text-slate-400 font-normal">[empty]</span>}
+                                    </td>
+                                    <td className="p-3 text-slate-600">{(m.timeSpentMs / 1000).toFixed(2)}s</td>
+                                    <td className="p-3 text-right">
+                                      <span className="text-[10px] font-black uppercase text-rose-700 bg-rose-100 px-2 py-0.5 rounded border border-rose-300">
+                                        Mismatch
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
 
-                  {/* Visual stream progress line */}
-                  <div className="-mt-2">
-                    <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                      <div 
-                        className="bg-indigo-650 h-1.5 transition-all duration-300"
-                        style={{ width: `${((currentIndex + 1) / expectedDataset.length) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Typing form input container */}
-                  <div className="space-y-3.5 relative">
-                    <label htmlFor="numeric-speed-input" className="block text-xs font-bold text-slate-700 uppercase tracking-widest">
-                      {activeTrainingCategory === 'date_number' 
-                        ? '8-Digit Date (YYYYMMDD)' 
-                        : activeTrainingCategory === 'phone_number' 
-                        ? 'Phone Digits (Numbers only)' 
-                        : 'Character Sequence Input (T+13)'}
-                    </label>
-
-                    {/* Alphanumeric / Numeric Text Field */}
-                    <div className="relative">
-                      <input
-                        id="numeric-speed-input"
-                        ref={inputRef}
-                        type="text"
-                        value={typedValue}
-                        onChange={handleInputChange}
-                        onPaste={handlePastePrevent}
-                        onCopy={handleCopyPrevent}
-                        autoComplete="off"
-                        autoCapitalize="characters"
-                        spellCheck={false}
-                        placeholder={
-                          activeTrainingCategory === 'date_number' ? '2026...' :
-                          activeTrainingCategory === 'phone_number' ? '03... / 090...' :
-                          (expectedDataset[currentIndex].expectedNumber.startsWith('T') ? 'T...' : '13...')
-                        }
-                        className={`w-full py-4 px-5 text-center text-3xl font-bold tracking-[0.2em] font-mono text-slate-800 placeholder:text-slate-300 bg-slate-50 border focus:ring-4 outline-none rounded-xl transition ${
-                          lastCharacterValid === true ? 'border-emerald-500 focus:ring-emerald-50 bg-emerald-50/10 text-emerald-800' : 
-                          lastCharacterValid === false ? 'border-rose-500 focus:ring-rose-50 bg-rose-50/10 text-rose-800' : 'border-slate-250 focus:ring-indigo-100'
-                        }`}
-                      />
-
-                      {/* Character limit feedback ticks */}
-                      <div className="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 flex items-center justify-center">
-                        <span className="text-[11px] font-bold font-mono text-slate-400 bg-white border border-slate-205 px-1.5 py-0.5 rounded tracking-wide">
-                          {typedValue.length} / {
-                            activeTrainingCategory === 'date_number' ? 8 :
-                            activeTrainingCategory === 'phone_number' ? (expectedDataset[currentIndex].expectedNumber.replace(/\D/g, '').length || 10) :
-                            (expectedDataset[currentIndex].expectedNumber.startsWith('T') && typedValue.startsWith('T') ? 14 : 13)
-                          }
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Visual tick ribbon */}
-                    <div className="flex justify-center space-x-1 h-1.5">
-                      {Array.from({ 
-                        length: activeTrainingCategory === 'date_number' ? 8 :
-                          activeTrainingCategory === 'phone_number' ? (expectedDataset[currentIndex].expectedNumber.replace(/\D/g, '').length || 10) :
-                          (expectedDataset[currentIndex].expectedNumber.startsWith('T') && typedValue.startsWith('T') ? 14 : 13)
-                      }).map((_, idx) => {
-                        let dotColor = 'bg-slate-100 border border-slate-200';
-                        if (idx < typedValue.length) {
-                          if (lastCharacterValid === false && idx === typedValue.length - 1) {
-                            dotColor = 'bg-rose-500';
-                          } else {
-                            dotColor = 'bg-indigo-600';
-                          }
-                        }
-                        return (
-                          <div 
-                            key={idx} 
-                            className={`w-3.5 h-1.5 rounded-full transition-colors ${dotColor}`} 
-                          />
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Entry help parameters card */}
-                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-150 space-y-2">
-                    <span className="text-[10px] uppercase font-bold tracking-widest text-slate-500 block font-semibold">
-                      Workstation Specifications:
+                  {/* Certificate Downloads */}
+                  <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-slate-150 text-xs">
+                    <span className="text-slate-500 font-sans">
+                      Session recorded in database table <strong className="font-mono text-slate-700">training_sessions</strong>.
                     </span>
-                    <ul className="text-xs text-slate-550 space-y-1.5 leading-relaxed list-disc list-inside">
-                      {activeTrainingCategory === 'date_number' ? (
-                        <>
-                          <li>Enter 8 numeric digits formatted as <strong className="text-slate-800">YYYYMMDD</strong> (e.g. 20260522).</li>
-                          <li>Auto-advances instantly upon reaching 8 digits.</li>
-                        </>
-                      ) : activeTrainingCategory === 'phone_number' ? (
-                        <>
-                          <li>Enter numeric digits only (e.g. 0312345678 or 09012345678).</li>
-                          <li>Auto-advances immediately upon matching expected telephone length.</li>
-                        </>
-                      ) : (
-                        <>
-                          <li>Type registration code: Capital <strong className="text-slate-800">T</strong> followed by 13 digits.</li>
-                          <li>If you skip typing &quot;T&quot;, enter just the 13 digits and it auto-advances.</li>
-                        </>
-                      )}
-                      <li>Paste is disabled for verification integrity.</li>
-                      <li>Click outside? Use <button onClick={() => inputRef.current?.focus()} className="text-indigo-600 hover:text-indigo-500 underline cursor-pointer font-bold">Refocus Field</button>.</li>
-                    </ul>
-                  </div>
-                </div>
 
-                {/* Left Time threshold bar */}
-                <div className="mt-8 border-t border-slate-150 pt-4 flex justify-between items-center text-slate-500 text-[11px] font-mono">
-                  <span>Image ID: {expectedDataset[currentIndex].id.toUpperCase()}</span>
-                  <span className={elapsedMs > categorySlaTarget ? 'text-rose-600 font-bold' : ''}>
-                    Pace: {(elapsedMs / 1000).toFixed(1)}s / {categorySlaLimitSec}s
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* C. WORKSHEET TEST COMPLETE - RESULTS */}
-        {testComplete && (
-          <div className="space-y-6 animate-fade-in" id="results-display-screen">
-            {/* Real-time stats header banner */}
-            <Suspense fallback={<LoadingFallback message="Loading assessment results..." className="p-4 min-h-[90px]" />}>
-              <StatsPanel
-                currentIndex={expectedDataset.length}
-                totalCount={expectedDataset.length}
-                correctCount={correctCount}
-                elapsedMs={0}
-                averageTimeMs={averageTimeMs}
-                isTestActive={false}
-                trainingMode={trainingMode}
-                category={activeTrainingCategory}
-              />
-            </Suspense>
-
-            {/* Main results summary block */}
-            <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-10 shadow-sm relative overflow-hidden animate-fade-in">
-              <div className="absolute top-0 right-0 p-10 select-none pointer-events-none opacity-[0.02] text-indigo-600">
-                <Trophy className="w-96 h-96" />
-              </div>
-
-              <div className="relative z-10 flex flex-col md:flex-row gap-8 items-center justify-between">
-                <div className="space-y-4 text-center md:text-left">
-                  <div className="flex items-center justify-center md:justify-start gap-3">
-                    <div className="p-3 bg-amber-50 text-amber-600 rounded-2xl border border-amber-200">
-                      <Trophy className="w-10 h-10 animate-bounce" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2 justify-center md:justify-start flex-wrap">
-                        <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-800 tracking-tight">
-                          Assessment Finalized
-                        </h2>
-                        <span className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
-                          {activeTrainingCategory === 'date_number' ? '📅 Date' : activeTrainingCategory === 'phone_number' ? '📞 Phone' : '🧾 Tax No'}
-                        </span>
-                        {trainingMode === 'hard_180' || expectedDataset.length > 90 ? (
-                          <span className="inline-flex items-center gap-1.5 bg-purple-100 text-purple-800 border border-purple-300 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
-                            <span className="w-2 h-2 rounded-full bg-purple-600"></span>
-                            ⚡ Hard Mode (180 Invoices)
-                          </span>
-                        ) : trainingMode === 'normal_90' || expectedDataset.length > 20 ? (
-                          <span className="inline-flex items-center gap-1.5 bg-blue-50 text-blue-700 border border-blue-200 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
-                            <span className="w-2 h-2 rounded-full bg-blue-600"></span>
-                            Normal Mode (90 Invoices)
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
-                            <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
-                            Easy Mode (20 Invoices)
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm text-slate-500 mt-1">
-                        Workspace review and analytics scores successfully registered.
-                      </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleDownloadPDF}
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer text-xs uppercase tracking-wider font-sans"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Download PDF</span>
+                      </button>
+                      <button
+                        onClick={handleDownloadHTML}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer text-xs uppercase tracking-wider font-sans"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Download HTML</span>
+                      </button>
                     </div>
                   </div>
-
-                  {/* Rank Display Badge */}
-                  <div className="flex items-center gap-2 justify-center md:justify-start">
-                    <span className="text-xs uppercase text-slate-400 font-bold tracking-widest font-mono">Evaluation Rating:</span>
-                    <span className={`text-[10px] px-3 py-1 rounded-full font-bold uppercase tracking-wider border ${currentRank.color}`}>
-                      {currentRank.name}
-                    </span>
-                  </div>
-                  
-                  {saveError && (
-                    <div className="p-2 border border-rose-200 bg-rose-50 text-rose-700 rounded text-xs flex items-center gap-2">
-                      <ShieldAlert className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                      <span>{saveError}</span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-                  <button
-                    onClick={handleDownloadPDF}
-                    className="px-5 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 shadow-md cursor-pointer text-sm uppercase tracking-wider shrink-0"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Download PDF Result</span>
-                  </button>
-                  <button
-                    onClick={handleDownloadHTML}
-                    className="px-5 py-3.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 shadow-md cursor-pointer text-sm uppercase tracking-wider shrink-0"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span>Download HTML Result</span>
-                  </button>
-                  <button
-                    onClick={handleRunAgain}
-                    className="px-5 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 shadow-sm cursor-pointer text-sm uppercase tracking-wider"
-                    id="btn-run-again"
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                    <span>Run Again</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setTestComplete(false);
-                      setIsTestActive(false);
-                    }}
-                    className="px-5 py-3.5 bg-white hover:bg-slate-50 text-slate-700 rounded-xl font-bold transition flex items-center justify-center border border-slate-200 gap-1.5 cursor-pointer text-sm font-sans"
-                  >
-                    <span>Return to Configuration</span>
-                  </button>
                 </div>
               </div>
 
-              {/* Item details table logs list card */}
-              <div className="mt-10 border-t border-slate-150 pt-8" id="itemized-analysis-card">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-widest flex items-center gap-2">
-                    <BarChart2 className="w-4 h-4 text-indigo-650" /> Complete Worksheet Analysis ({expectedDataset.length} Invoices)
+              {/* Complete Chronological 100-Card Audit Trail */}
+              <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-3 flex-wrap gap-2">
+                  <h3 className="text-xs font-black text-slate-700 uppercase tracking-widest flex items-center gap-2">
+                    <BarChart2 className="w-4 h-4 text-indigo-650" /> Complete 100-Card Transcription Chronology
                   </h3>
-                  <span className="text-xs font-mono text-slate-400">SORTED BY CHRONOLOGY</span>
+                  <span className="text-xs font-mono text-slate-400">CARDS 1 TO 100 SEQUENTIAL</span>
                 </div>
 
-                {/* Items grid */}
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto max-h-[380px] overflow-y-auto pr-1">
                   <table className="w-full text-left text-xs border-collapse font-mono">
                     <thead>
-                      <tr className="border-b border-slate-200 text-slate-400 font-bold uppercase tracking-wider pb-3 text-[10px]">
+                      <tr className="border-b border-slate-200 text-slate-400 font-bold uppercase tracking-wider pb-3 text-[10px] sticky top-0 bg-white">
                         <th className="pb-3 text-left">No.</th>
-                        <th className="pb-3">Image ID</th>
-                        <th className="pb-3">
-                          Expected ({activeTrainingCategory === 'date_number' ? 'Date YYYYMMDD' : activeTrainingCategory === 'phone_number' ? 'Phone Digits' : 'Tax Code'})
-                        </th>
-                        <th className="pb-3 text-slate-600">Your Typing Entry</th>
-                        <th className="pb-3">Lapse Speed</th>
-                        <th className="pb-3 text-right">Status</th>
+                        <th className="pb-3">Category</th>
+                        <th className="pb-3">Expected Target</th>
+                        <th className="pb-3 text-slate-600">Your Typing Input</th>
+                        <th className="pb-3">Time</th>
+                        <th className="pb-3 text-right">Result</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-150">
                       {sessionResults.map((result, idx) => {
-                        const meetsSLA = result.timeSpentMs <= categorySlaTarget;
+                        const isUnderTarget = result.timeSpentMs <= 2300;
                         return (
                           <tr key={idx} className="hover:bg-slate-50 transition text-slate-700">
-                            <td className="py-3 font-semibold text-slate-400">{String(idx + 1).padStart(2, '0')}</td>
-                            <td className="py-3 text-slate-500">{result.imageId.toUpperCase()}</td>
-                            <td className="py-3 font-bold text-slate-900">{result.expectedNumber}</td>
-                            <td className="py-3 text-slate-700">{result.typedNumber || <span className="italic text-slate-400 font-normal leading-none">[skipped]</span>}</td>
-                            <td className={`py-3 font-semibold ${meetsSLA ? 'text-indigo-600' : 'text-amber-600'}`}>
-                              {(result.timeSpentMs / 1000).toFixed(2)}s {meetsSLA ? '(Meets SLA)' : `(Over ${categorySlaLimitSec}s)`}
+                            <td className="py-2.5 font-semibold text-slate-400">{String(idx + 1).padStart(2, '0')}</td>
+                            <td className="py-2.5 font-sans">
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 uppercase border border-slate-200">
+                                {result.category === 'date_number' ? 'Date' : result.category === 'phone_number' ? 'Phone' : 'Tax'}
+                              </span>
                             </td>
-                            <td className="py-3 text-right">
+                            <td className="py-2.5 font-bold text-slate-900">{result.expectedNumber}</td>
+                            <td className="py-2.5 text-slate-700">{result.typedNumber || <span className="italic text-slate-400">[empty]</span>}</td>
+                            <td className={`py-2.5 font-semibold ${isUnderTarget ? 'text-indigo-600' : 'text-slate-600'}`}>
+                              {(result.timeSpentMs / 1000).toFixed(2)}s
+                            </td>
+                            <td className="py-2.5 text-right">
                               {result.isCorrect ? (
-                                <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded text-[10px] uppercase font-bold border border-emerald-200">
-                                  <Check className="w-3.5 h-3.5 text-emerald-700" /> Match
+                                <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-[10px] uppercase font-bold border border-emerald-200">
+                                  <Check className="w-3 h-3 text-emerald-700" /> Match
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center gap-1 bg-rose-100 text-rose-800 px-2.5 py-1 rounded text-[10px] uppercase font-bold border border-rose-200">
-                                  <X className="w-3.5 h-3.5 text-rose-700" /> Mismatch
+                                <span className="inline-flex items-center gap-1 bg-rose-100 text-rose-800 px-2 py-0.5 rounded text-[10px] uppercase font-bold border border-rose-200">
+                                  <X className="w-3 h-3 text-rose-700" /> Mistake
                                 </span>
                               )}
                             </td>
@@ -2295,8 +2753,8 @@ export default function App() {
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* 3. Bottom Section: Historical logs */}
         <Suspense fallback={<LoadingFallback message="Loading session benchmarks..." className="p-12 min-h-[260px]" />}>

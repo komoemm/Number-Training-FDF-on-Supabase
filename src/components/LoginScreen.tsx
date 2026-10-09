@@ -5,6 +5,8 @@
 
 import React, { useState } from 'react';
 import { ShieldCheck, UserCheck, Key, AlertCircle, Sparkles, Zap, ArrowRight } from 'lucide-react';
+import { useLanguage } from '../context/LanguageContext';
+import LanguageSwitcher from './LanguageSwitcher';
 
 interface LoginScreenProps {
   onLogin: (username: string, passwordText: string) => { success: boolean; error?: string };
@@ -12,6 +14,7 @@ interface LoginScreenProps {
 }
 
 export default function LoginScreen({ onLogin }: LoginScreenProps) {
+  const { t, language } = useLanguage();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -22,17 +25,17 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
 
     const trimmedUser = username.trim();
     if (!trimmedUser) {
-      setErrorMsg('Please enter your Operator ID / Username.');
+      setErrorMsg(t.loginErrorEmptyUser);
       return;
     }
     if (!password) {
-      setErrorMsg('Please enter your password.');
+      setErrorMsg(t.loginErrorEmptyPass);
       return;
     }
 
     const res = onLogin(trimmedUser, password);
     if (!res.success) {
-      setErrorMsg(res.error || 'Authentication failed. Please verify your credentials.');
+      setErrorMsg(res.error || t.loginErrorInvalid);
     }
   };
 
@@ -42,17 +45,22 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
     setPassword(pass);
     const res = onLogin(user, pass);
     if (!res.success) {
-      setErrorMsg(res.error || 'Authentication failed. Please verify your credentials.');
+      setErrorMsg(res.error || t.loginErrorInvalid);
     }
   };
 
   return (
     <main 
-      className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 sm:p-6 font-sans text-slate-100" 
+      className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 sm:p-6 font-sans text-slate-100 relative" 
       id="login-screen-root"
       role="main"
       aria-labelledby="login-main-heading"
     >
+      {/* Top Language Switcher Bar */}
+      <div className="absolute top-4 right-4 z-20">
+        <LanguageSwitcher showFullLabel />
+      </div>
+
       {/* Decorative ambient background glows */}
       <div 
         aria-hidden="true" 
@@ -73,12 +81,12 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
           
           <h1 
             id="login-main-heading"
-            className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight leading-tight font-sans pt-1"
+            className="text-xl sm:text-2xl font-extrabold text-white tracking-tight leading-snug font-sans pt-1"
           >
-            Support Training System
+            {t.appTitle}
           </h1>
-          <p className="text-slate-300 text-xs font-mono tracking-wider uppercase">
-            Qualified Invoice Speed Assessment
+          <p className="text-slate-300 text-xs font-sans tracking-wide">
+            {t.loginSubheading}
           </p>
         </header>
 
@@ -96,10 +104,12 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
               <ShieldCheck className="w-6 h-6" />
             </div>
             <h2 id="operator-sign-in-heading" className="text-lg sm:text-xl font-bold text-white tracking-tight pt-1">
-              Operator Sign-In
+              {t.loginHeading}
             </h2>
             <p className="text-xs text-slate-300">
-              Provide credentials to access speed assessment modules
+              {language === 'my' 
+                ? 'လေ့ကျင့်ရေးစနစ်အတွင်း ဝင်ရောက်ရန် အချက်အလက်များ ထည့်သွင်းပါ' 
+                : 'Provide credentials to access speed assessment modules'}
             </p>
           </div>
 
@@ -129,7 +139,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
                 htmlFor="login-username" 
                 className="block text-xs font-semibold text-slate-200 tracking-wide"
               >
-                Operator ID / Username <span className="text-rose-400" aria-hidden="true">*</span>
+                {t.operatorIdPlaceholder} <span className="text-rose-400" aria-hidden="true">*</span>
               </label>
               <div className="relative flex items-center">
                 <UserCheck className="w-4 h-4 text-slate-400 absolute left-3.5 pointer-events-none" aria-hidden="true" />
@@ -158,7 +168,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
                 htmlFor="login-password" 
                 className="block text-xs font-semibold text-slate-200 tracking-wide"
               >
-                Password <span className="text-rose-400" aria-hidden="true">*</span>
+                {t.passwordPlaceholder} <span className="text-rose-400" aria-hidden="true">*</span>
               </label>
               <div className="relative flex items-center">
                 <Key className="w-4 h-4 text-slate-400 absolute left-3.5 pointer-events-none" aria-hidden="true" />
@@ -185,7 +195,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
               id="login-submit-button"
               className="w-full min-h-[48px] bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-bold p-3 rounded-xl transition flex items-center justify-center space-x-2 cursor-pointer shadow-lg hover:shadow-indigo-500/20 text-xs sm:text-sm uppercase tracking-wider font-sans mt-2 focus-visible:outline-2 focus-visible:outline-indigo-300 focus-visible:ring-2 focus-visible:ring-indigo-400/50"
             >
-              <span>Authenticate Operator</span>
+              <span>{t.signInBtn}</span>
               <ArrowRight className="w-4 h-4 text-white" aria-hidden="true" />
             </button>
           </form>
@@ -201,7 +211,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
               className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5"
             >
               <Sparkles className="w-3.5 h-3.5 text-indigo-400" aria-hidden="true" />
-              <span>Default Sandbox Accounts</span>
+              <span>{t.quickLoginHeading}</span>
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -209,17 +219,17 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
               <button
                 type="button"
                 onClick={() => handleShortcutLogin('admin', 'admin')}
-                aria-label="Log in as Administrator with username admin and password admin"
+                aria-label="Log in as Administrator"
                 className="flex flex-col items-start bg-slate-950 hover:bg-slate-900 border border-slate-700/80 hover:border-indigo-500/80 rounded-xl p-3 text-left transition cursor-pointer text-xs min-h-[54px] focus-visible:outline-2 focus-visible:outline-indigo-300"
               >
                 <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1">
-                  👑 Administrator
+                  👑 {t.adminPreset}
                 </span>
                 <span className="text-xs text-indigo-300 font-bold font-mono mt-0.5">
                   admin / admin
                 </span>
                 <span className="text-[11px] text-slate-300 mt-1 leading-tight">
-                  Full operator management & reports
+                  {language === 'my' ? 'စီမံခန့်ခွဲသူ လုပ်ပိုင်ခွင့်အပြည့်' : 'Full operator management & reports'}
                 </span>
               </button>
 
@@ -227,17 +237,17 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
               <button
                 type="button"
                 onClick={() => handleShortcutLogin('guest', 'guest')}
-                aria-label="Log in as Practice Student with username guest and password guest"
+                aria-label="Log in as Practice Student"
                 className="flex flex-col items-start bg-slate-950 hover:bg-slate-900 border border-slate-700/80 hover:border-pink-500/80 rounded-xl p-3 text-left transition cursor-pointer text-xs min-h-[54px] focus-visible:outline-2 focus-visible:outline-pink-300"
               >
                 <span className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1">
-                  🎓 Practice Student
+                  🎓 {t.guestPreset}
                 </span>
                 <span className="text-xs text-pink-300 font-bold font-mono mt-0.5">
                   guest / guest
                 </span>
                 <span className="text-[11px] text-slate-300 mt-1 leading-tight">
-                  Standard speed benchmark runs
+                  {language === 'my' ? 'ပုံမှန် လေ့ကျင့်ရေး အကောင့်' : 'Standard speed benchmark runs'}
                 </span>
               </button>
             </div>
@@ -254,4 +264,5 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
     </main>
   );
 }
+
 
