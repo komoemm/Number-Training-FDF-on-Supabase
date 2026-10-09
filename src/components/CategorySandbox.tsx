@@ -85,29 +85,47 @@ export const normalizeKey = (val: string): string => {
 };
 
 // 3. Category-Aware Target Cleaning Helper:
-// - tax_number: converts full-width numbers, strips leading "T"/"t", ensures pure numeric digits only
+// - tax_number: converts full-width numbers, preserves 10-digit registration numbers or strips leading "T"/"t" for 13 digits
 // - phone_number: converts full-width numbers, strictly preserves leading zeros as text
-// - date_number: converts full-width numbers, normalizes to 8 digits YYYYMMDD
+// - date_number: converts full-width numbers, normalizes strictly to 8 digits YYYYMMDD
 export const cleanEnteredTarget = (raw: string, cat: TrainingCategory): string => {
   const val = String(raw || '').trim();
-  if (cat === 'tax_number') {
+  const catLower = String(cat || '').toLowerCase();
+  if (catLower === 'tax_number' || catLower === 'tax') {
     let tax = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+    const rawDigits = tax.replace(/\D/g, '');
+    if (rawDigits.length === 10) {
+      return rawDigits;
+    }
     tax = tax.replace(/^T/i, '');
     tax = tax.replace(/\D/g, '');
-    return tax;
+    if (tax.length >= 13) {
+      return tax.slice(-13);
+    }
+    return tax.slice(0, 13);
   }
-  if (cat === 'date_number') {
+  if (catLower === 'date_number' || catLower === 'date') {
     let dateStr = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
     const dateParts = dateStr.split(/[/.\-年日月\s]+/).filter(Boolean);
     if (dateParts.length >= 3 && dateParts[0].length === 4) {
       const y = dateParts[0];
-      const m = dateParts[1].padStart(2, '0');
-      const d = dateParts[2].padStart(2, '0');
+      const m = dateParts[1].padStart(2, '0').slice(-2);
+      const d = dateParts[2].padStart(2, '0').slice(-2);
       return `${y}${m}${d}`;
     }
-    return dateStr.replace(/\D/g, '');
+    const digitsOnly = dateStr.replace(/\D/g, '');
+    if (digitsOnly.length >= 8) {
+      return digitsOnly.slice(0, 8);
+    }
+    if (digitsOnly.length === 6) {
+      return `20${digitsOnly}`;
+    }
+    if (digitsOnly.length > 0 && digitsOnly.length < 8) {
+      return digitsOnly.padEnd(8, '0');
+    }
+    return digitsOnly || '20260406';
   }
-  if (cat === 'phone_number') {
+  if (catLower === 'phone_number' || catLower === 'phone') {
     let phone = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
     // Strictly preserve leading zeros as text; normalize hyphens and strip whitespace
     return phone.replace(/[ー－―]/g, '-').replace(/\s+/g, '');
@@ -949,27 +967,35 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   };
 
   // Category Configuration Meta
+  const catLowerKey = String(category || '').toLowerCase();
+  const normCategory: 'tax_number' | 'date_number' | 'phone_number' =
+    catLowerKey === 'date' || catLowerKey === 'date_number'
+      ? 'date_number'
+      : catLowerKey === 'phone' || catLowerKey === 'phone_number'
+      ? 'phone_number'
+      : 'tax_number';
+
   const config = {
     tax_number: {
       title: '🧾 Tax Number Data Entry (登録番号)',
-      subtitle: 'Transcribe 13-digit Japanese Qualified Invoice Tax Registration Numbers from receipt images.',
-      inputRule: "Enter 13 numeric digits (without 'T'). Hyphens are skipped.",
-      autoAdvance: 'Auto-advances immediately upon typing 13 numeric digits.',
+      subtitle: 'Transcribe 13-digit Japanese Qualified Invoice Tax Registration Numbers (or 10-digit Registration Numbers) from receipt images.',
+      inputRule: "Enter 13 numeric digits (without 'T'). For 10-digit numbers, enter 10 digits.",
+      autoAdvance: 'Auto-advances immediately upon matching target length (13 or 10 digits).',
       slaTarget: 'Target speed is under 6.00 seconds per invoice with ≥ 95% accuracy.',
       codePlaceholder: '1234567890123',
-      codeLabel: 'Registration Tax Code (13 numeric digits)',
+      codeLabel: 'Registration Tax Code (13 or 10 numeric digits)',
       extractHint: 'Filename auto-detects 13 numeric digits (e.g. receipt_1234567890123.jpg or receipt_T1234567890123.jpg)',
       slaLimit: '6.00s'
     },
     date_number: {
       title: '📅 Date Number Data Entry (発行年月日 / 取引日)',
       subtitle: 'Transcribe 8-digit Japanese Invoice Transaction Dates (YYYYMMDD) from receipt images.',
-      inputRule: 'Enter 8 numeric digits in YYYYMMDD format (e.g. 20260522 for 2026年5月22日).',
+      inputRule: 'Enter 8 numeric digits strictly in YYYYMMDD format (e.g. 20260406 for 2026年04月06日).',
       autoAdvance: 'Auto-advances immediately upon reaching exactly 8 numeric digits.',
       slaTarget: 'Target speed is under 4.00 seconds per invoice with ≥ 95% accuracy.',
-      codePlaceholder: '20260522',
+      codePlaceholder: '20260406',
       codeLabel: '8-Digit Date (YYYYMMDD)',
-      extractHint: 'Filename auto-detects 8-digit dates (e.g. receipt_20260522.jpg)',
+      extractHint: 'Filename auto-detects 8-digit dates (e.g. receipt_20260406.jpg)',
       slaLimit: '4.00s'
     },
     phone_number: {
@@ -983,7 +1009,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
       extractHint: 'Filename auto-detects telephone sequences (e.g. receipt_0312345678.jpg)',
       slaLimit: '5.00s'
     }
-  }[category];
+  }[normCategory];
 
   const handleFiles = async (files: FileList | File[]) => {
     setIsUploading(true);
@@ -1867,10 +1893,12 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                     </h3>
                     <p className="text-xs text-slate-500 mt-1 leading-relaxed">
                       {category === 'date_number' 
-                        ? 'Verify the 8-digit transaction date (YYYYMMDD) for this receipt image.'
+                        ? 'Verify the strictly 8-digit transaction date (YYYYMMDD) for this receipt image.'
                         : category === 'phone_number'
                         ? 'Verify telephone contact digits for this receipt image (leading zeros preserved).'
-                        : "Enter 13 numeric digits (without 'T')"}
+                        : (modalTarget.replace(/\D/g, '').length === 10 || (currentInv.target && currentInv.target.replace(/\D/g, '').length === 10))
+                        ? 'Verify 10-digit Registration / Tax No (e.g. 088-632-4959).'
+                        : "Enter 13 numeric digits (without 'T') or 10 digits for registration numbers."}
                     </p>
                   </div>
 
@@ -1904,7 +1932,13 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                     <div>
                       <div className="flex items-center justify-between mb-1">
                         <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-widest">
-                          Expected Transcribed Value <span className="text-rose-500">*</span>
+                          {category === 'date_number'
+                            ? 'Expected Date (YYYYMMDD - 8 Digits)'
+                            : category === 'phone_number'
+                            ? 'Expected Phone Digits'
+                            : (modalTarget.replace(/\D/g, '').length === 10 || (currentInv.target && currentInv.target.replace(/\D/g, '').length === 10))
+                            ? 'REGISTRATION / TAX NO (10 DIGITS)'
+                            : 'Expected Tax Number (13 Digits / T+13)'} <span className="text-rose-500">*</span>
                         </label>
                         {isItemSynced && (
                           <span className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
@@ -1914,7 +1948,12 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                       </div>
                       <input
                         type="text"
-                        placeholder={config[category]?.codePlaceholder || '1234567890123'}
+                        placeholder={
+                          category === 'date_number' ? '20260406' :
+                          category === 'phone_number' ? '0312345678' :
+                          (modalTarget.replace(/\D/g, '').length === 10 || (currentInv.target && currentInv.target.replace(/\D/g, '').length === 10)) ? '0886324959' :
+                          '1234567890123'
+                        }
                         value={modalTarget}
                         autoFocus
                         onChange={(e) => {
@@ -1931,7 +1970,9 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                         className="w-full p-2.5 bg-slate-50 border border-slate-300 text-sm text-slate-900 font-mono font-bold rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 tracking-wide text-indigo-700 uppercase"
                       />
                       <p className="text-[10px] text-slate-400 mt-1">
-                        {category === 'tax_number' ? "Enter 13 numeric digits (without 'T'). " : ''}Press <strong className="text-slate-700 font-bold">Enter</strong> to save and proceed to next image.
+                        {category === 'tax_number' 
+                          ? ((modalTarget.replace(/\D/g, '').length === 10 || (currentInv.target && currentInv.target.replace(/\D/g, '').length === 10)) ? 'Registration / Tax No (10 digits). ' : "Enter 13 numeric digits (without 'T'). ") 
+                          : category === 'date_number' ? 'Enter 8 digits as YYYYMMDD. ' : ''}Press <strong className="text-slate-700 font-bold">Enter</strong> to save and proceed to next image.
                       </p>
                     </div>
 

@@ -46,7 +46,7 @@ export function generateRandomInvoiceNumber(): string {
 }
 
 /**
- * Helper to generate random 8-digit date string (YYYYMMDD).
+ * Helper to generate random 8-digit date string formatted strictly as YYYYMMDD.
  */
 export function generateRandomDateNumber(): string {
   const year = 2024 + Math.floor(Math.random() * 3); // 2024-2026
@@ -76,15 +76,19 @@ export function generateSampleCustomInvoice(category: TrainingCategory = 'tax_nu
   const style = styles[Math.floor(Math.random() * styles.length)];
   const year = 2026;
   const month = String(1 + (index % 12)).padStart(2, '0');
-  const day = String(1 + (index * 3) % 28).padStart(2, '0');
+  const day = String(1 + ((index * 3) % 28)).padStart(2, '0');
   const invoiceDate = `${year}年${month}月${day}日`;
   const totalAmount = `${(1200 + Math.floor(Math.random() * 8500)).toLocaleString()}円`;
 
+  const catLower = String(category || '').toLowerCase();
+  const isDate = catLower === 'date_number' || catLower === 'date';
+  const isTax = catLower === 'tax_number' || catLower === 'tax';
+
   let expectedNumber = '';
-  if (category === 'tax_number') {
-    expectedNumber = generateRandomInvoiceNumber();
-  } else if (category === 'date_number') {
-    expectedNumber = `${year}${month}${day}`;
+  if (isTax) {
+    expectedNumber = generateRandomInvoiceNumber(); // Strictly T + 13 digits
+  } else if (isDate) {
+    expectedNumber = `${year}${month}${day}`; // Strictly 8-digit YYYYMMDD
   } else {
     expectedNumber = generateRandomPhoneNumber();
   }
@@ -263,42 +267,45 @@ export function renderReceiptToDataUrl(data: GeneratedInvoiceData): string {
   let labelText = '登録番号 (Tax Number)';
   let printedNo = data.expectedNumber;
 
-  if (category === 'tax_number') {
-    const labels = [
-      '登録番号 (Qualified Invoice No.)',
-      '適格請求書発行事業者登録番号 [Ｔ]',
-      'インボイス登録番号',
-      'T-REGISTRATION NO.'
-    ];
-    labelText = labels[Math.abs(data.id.length) % labels.length];
-    
-    // Grouping variation: T-1234-5678-90123 or T 1234 5678 90123 or raw
-    const v = Math.abs(data.id.length) % 3;
-    if (v === 1 && data.expectedNumber.startsWith('T') && data.expectedNumber.length === 14) {
-      printedNo = `T ${data.expectedNumber.slice(1, 5)} ${data.expectedNumber.slice(5, 9)} ${data.expectedNumber.slice(9)}`;
-    } else if (v === 2 && data.expectedNumber.startsWith('T') && data.expectedNumber.length === 14) {
-      printedNo = `T-${data.expectedNumber.slice(1, 5)}-${data.expectedNumber.slice(5, 9)}-${data.expectedNumber.slice(9)}`;
-    }
-  } else if (category === 'date_number') {
-    const labels = [
-      '取引年月日 (Transaction Date)',
-      '発行日付 / 売上日',
-      '領収日時 (DATE)',
-      '会計日付'
-    ];
-    labelText = labels[Math.abs(data.id.length) % labels.length];
+  const catLower = String(category || '').toLowerCase();
+  const isDate = catLower === 'date_number' || catLower === 'date';
+  const isTax = catLower === 'tax_number' || catLower === 'tax';
+  const isPhone = catLower === 'phone_number' || catLower === 'phone';
 
-    // Format date in printed form e.g. 2026/05/22 or 2026年05月22日 or 2026-05-22
-    if (data.expectedNumber.length === 8 && /^\d{8}$/.test(data.expectedNumber)) {
-      const y = data.expectedNumber.slice(0, 4);
-      const m = data.expectedNumber.slice(4, 6);
-      const d = data.expectedNumber.slice(6, 8);
+  if (isTax) {
+    const rawClean = data.expectedNumber.replace(/[^a-zA-Z0-9]/g, '');
+    const rawDigits = data.expectedNumber.replace(/\D/g, '');
+
+    if (rawDigits.length === 10) {
+      // 10-digit registration number
+      labelText = 'REGISTRATION / TAX NO (10 DIGITS)';
+      printedNo = `${rawDigits.slice(0, 3)}-${rawDigits.slice(3, 6)}-${rawDigits.slice(6)}`;
+    } else {
+      // Japanese Corporate Tax Number: strictly ensure 13 digits prefixed with 'T'
+      const digits13 = rawDigits.slice(-13).padStart(13, '0');
+      labelText = '適格請求書発行事業者登録番号 [Ｔ]';
       const v = Math.abs(data.id.length) % 3;
-      if (v === 0) printedNo = `${y}/${m}/${d}`;
-      else if (v === 1) printedNo = `${y}年${m}月${d}日`;
-      else printedNo = `${y}-${m}-${d}`;
+      if (v === 1) {
+        printedNo = `T ${digits13.slice(0, 4)} ${digits13.slice(4, 8)} ${digits13.slice(8)}`;
+      } else if (v === 2) {
+        printedNo = `T-${digits13.slice(0, 4)}-${digits13.slice(4, 8)}-${digits13.slice(8)}`;
+      } else {
+        printedNo = `T${digits13}`;
+      }
     }
-  } else if (category === 'phone_number') {
+  } else if (isDate) {
+    labelText = '取引年月日 / DATE (YYYYMMDD)';
+    const rawDigits = data.expectedNumber.replace(/\D/g, '');
+    let y = '2026', m = '04', d = '06';
+    if (rawDigits.length >= 8) {
+      y = rawDigits.slice(0, 4);
+      m = rawDigits.slice(4, 6);
+      d = rawDigits.slice(6, 8);
+    }
+    const date8 = `${y}${m}${d}`;
+    // Format clearly so both standard display and 8-digit YYYYMMDD input are visible without truncation
+    printedNo = `${y}/${m}/${d} (${date8})`;
+  } else if (isPhone) {
     const labels = [
       'お問合せ電話番号 (TEL)',
       'TEL / 連絡先',
@@ -312,13 +319,19 @@ export function renderReceiptToDataUrl(data: GeneratedInvoiceData): string {
     if (rawDigits.startsWith('090') || rawDigits.startsWith('080') || rawDigits.startsWith('070')) {
       if (rawDigits.length === 11) {
         printedNo = `${rawDigits.slice(0, 3)}-${rawDigits.slice(3, 7)}-${rawDigits.slice(7)}`;
+      } else {
+        printedNo = rawDigits;
       }
     } else if (rawDigits.startsWith('03') || rawDigits.startsWith('06')) {
       if (rawDigits.length === 10) {
         printedNo = `${rawDigits.slice(0, 2)}-${rawDigits.slice(2, 6)}-${rawDigits.slice(6)}`;
+      } else {
+        printedNo = rawDigits;
       }
     } else if (rawDigits.length >= 10) {
       printedNo = `${rawDigits.slice(0, 3)}-${rawDigits.slice(3, 6)}-${rawDigits.slice(6)}`;
+    } else {
+      printedNo = data.expectedNumber;
     }
   }
 
@@ -326,12 +339,16 @@ export function renderReceiptToDataUrl(data: GeneratedInvoiceData): string {
 
   // Target Number Text
   ctx.fillStyle = '#1e1b4b';
-  let targetFontSize = category === 'tax_number' ? '18px' : '20px';
-  let codeFont = `bold ${targetFontSize} ${fontName}`;
+  let targetFontSize = (isDate || (isTax && data.expectedNumber.replace(/\D/g, '').length === 10)) ? 16 : 18;
+  let codeFont = `bold ${targetFontSize}px ${fontName}`;
   if (data.style === 'thermal_distorted') {
-    codeFont = `${targetFontSize} "Courier New", monospace`;
+    codeFont = `${targetFontSize}px "Courier New", monospace`;
   }
   ctx.font = codeFont;
+  while (ctx.measureText(printedNo).width > canvas.width - 80 && targetFontSize > 11) {
+    targetFontSize -= 1;
+    ctx.font = data.style === 'thermal_distorted' ? `${targetFontSize}px "Courier New", monospace` : `bold ${targetFontSize}px ${fontName}`;
+  }
   ctx.fillText(printedNo, 0, 10);
 
   ctx.restore();

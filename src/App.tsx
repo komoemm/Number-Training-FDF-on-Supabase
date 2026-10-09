@@ -804,11 +804,32 @@ export default function App() {
     const shuffled = fisherYatesShuffle(combinedPool);
 
     // 3. Select exactly 100 cards
-    const deck100: (GeneratedInvoiceData & { customImageUrl?: string })[] = [];
+    const deck100: (GeneratedInvoiceData & { customImageUrl?: string; expectedValue?: string })[] = [];
     for (let i = 0; i < 100; i++) {
       const item = shuffled[i % shuffled.length];
+      const catLower = String(item.category || 'tax_number').toLowerCase();
+      const isDate = catLower === 'date_number' || catLower === 'date';
+      const isTax = catLower === 'tax_number' || catLower === 'tax';
+      let expNum = item.expectedNumber;
+      if (isDate) {
+        const rawDigits = (expNum || '').replace(/\D/g, '');
+        if (rawDigits.length >= 8) {
+          expNum = rawDigits.slice(0, 8);
+        } else {
+          expNum = generateRandomDateNumber();
+        }
+      } else if (isTax) {
+        const rawDigits = (expNum || '').replace(/\D/g, '');
+        if (rawDigits.length === 10) {
+          expNum = rawDigits;
+        } else {
+          expNum = rawDigits.slice(-13).padStart(13, '0');
+        }
+      }
       deck100.push({
         ...item,
+        expectedNumber: expNum,
+        expectedValue: expNum,
         id: `card_${i + 1}_${item.id}_${Math.random().toString(36).substring(2, 6)}`
       });
     }
@@ -892,11 +913,41 @@ export default function App() {
       }
     }
 
-    setExpectedDataset(queue);
+    const sanitizedQueue: (GeneratedInvoiceData & { customImageUrl?: string; expectedValue?: string })[] = [];
+    queue.forEach((item, idx) => {
+      const catLower = String(category || item.category || 'tax_number').toLowerCase();
+      const isDate = catLower === 'date_number' || catLower === 'date';
+      const isTax = catLower === 'tax_number' || catLower === 'tax';
+      let expNum = item.expectedNumber;
+      if (isDate) {
+        const rawDigits = (expNum || '').replace(/\D/g, '');
+        if (rawDigits.length >= 8) {
+          expNum = rawDigits.slice(0, 8);
+        } else {
+          expNum = generateRandomDateNumber();
+        }
+      } else if (isTax) {
+        const rawDigits = (expNum || '').replace(/\D/g, '');
+        if (rawDigits.length === 10) {
+          expNum = rawDigits;
+        } else {
+          expNum = rawDigits.slice(-13).padStart(13, '0');
+        }
+      }
+      sanitizedQueue.push({
+        ...item,
+        category,
+        expectedNumber: expNum,
+        expectedValue: expNum,
+        id: item.id || `card_${idx + 1}_${Date.now()}`
+      });
+    });
+
+    setExpectedDataset(sanitizedQueue);
     
     // Map of URLs
     const urls: Record<string, string> = {};
-    queue.forEach(item => {
+    sanitizedQueue.forEach(item => {
       urls[item.id] = item.customImageUrl || renderReceiptToDataUrl(item);
     });
     setImageUrls(urls);
@@ -1261,35 +1312,57 @@ export default function App() {
     const rawVal = e.target.value;
     const currentInvoice = expectedDataset[currentIndex];
     if (!currentInvoice) return;
-    const category: TrainingCategory = currentInvoice.category || 'tax_number';
-    const expectedRaw = currentInvoice.expectedNumber || '';
-    const sanitizedExpected = expectedRaw.replace(/[^a-zA-Z0-9]/g, '');
+    const currentCard = currentInvoice;
+    const expectedValue = (currentCard as any).expectedValue || currentCard.expectedNumber || '';
+    const rawCategory = currentCard.category || 'tax_number';
+    const catLower = String(rawCategory || '').toLowerCase();
+    const isDateCategory = catLower === 'date_number' || catLower === 'date';
+    const isTaxCategory = catLower === 'tax_number' || catLower === 'tax';
+    const isPhoneCategory = catLower === 'phone_number' || catLower === 'phone';
+
+    const sanitizedExpected = expectedValue.replace(/[^a-zA-Z0-9]/g, '');
+    const expDigitsOnly = expectedValue.replace(/\D/g, '');
+    const isTenDigitTax = isTaxCategory && expDigitsOnly.length === 10;
 
     let cleaned = '';
     let targetLength = 13;
 
-    if (category === 'tax_number') {
-      cleaned = rawVal.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-      const hasT = sanitizedExpected.toUpperCase().startsWith('T');
-      const inputHasT = cleaned.startsWith('T');
-      targetLength = (hasT && inputHasT) ? 14 : 13;
-    } else if (category === 'date_number') {
-      cleaned = rawVal.replace(/\D/g, '');
+    if (isDateCategory) {
+      cleaned = rawVal.replace(/\D/g, '').slice(0, 8);
       targetLength = 8;
-    } else if (category === 'phone_number') {
+    } else if (isTenDigitTax) {
+      cleaned = rawVal.replace(/\D/g, '').slice(0, 10);
+      targetLength = 10;
+    } else if (isTaxCategory) {
+      const inputUpper = rawVal.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+      const expHasT = sanitizedExpected.toUpperCase().startsWith('T');
+      const inputHasT = inputUpper.startsWith('T');
+      if (expHasT && inputHasT) {
+        cleaned = inputUpper.slice(0, 14);
+        targetLength = 14;
+      } else {
+        cleaned = rawVal.replace(/\D/g, '').slice(0, 13);
+        targetLength = 13;
+      }
+    } else if (isPhoneCategory) {
       cleaned = rawVal.replace(/\D/g, '');
-      const expDigits = sanitizedExpected.replace(/\D/g, '');
-      targetLength = expDigits.length || 10;
+      targetLength = expDigitsOnly.length || 10;
+      cleaned = cleaned.slice(0, targetLength);
     } else {
       cleaned = rawVal.replace(/[^a-zA-Z0-9]/g, '');
-      targetLength = sanitizedExpected.length;
+      targetLength = sanitizedExpected.length || 10;
+      cleaned = cleaned.slice(0, targetLength);
     }
 
     setTypedValue(cleaned);
 
     // Real-time character match feedback
     if (cleaned.length > 0) {
-      if (category === 'tax_number') {
+      if (isDateCategory) {
+        setLastCharacterValid(expDigitsOnly.startsWith(cleaned));
+      } else if (isTenDigitTax) {
+        setLastCharacterValid(expDigitsOnly.startsWith(cleaned));
+      } else if (isTaxCategory) {
         const expectedUpper = sanitizedExpected.toUpperCase();
         if (expectedUpper.startsWith('T') && !cleaned.startsWith('T')) {
           const withoutT = expectedUpper.substring(1);
@@ -1298,8 +1371,7 @@ export default function App() {
           setLastCharacterValid(expectedUpper.startsWith(cleaned));
         }
       } else {
-        const sanitizedExpectedDigits = sanitizedExpected.replace(/\D/g, '');
-        setLastCharacterValid(sanitizedExpectedDigits.startsWith(cleaned));
+        setLastCharacterValid(expDigitsOnly.startsWith(cleaned));
       }
     } else {
       setLastCharacterValid(null);
@@ -1307,18 +1379,21 @@ export default function App() {
 
     // Auto-advance trigger
     if (cleaned.length >= targetLength && targetLength > 0) {
-      verifyAndAdvanceSession(cleaned, category);
+      verifyAndAdvanceSession(cleaned, rawCategory);
     }
   };
 
   /**
-   * Enter key triggers immediate submission
+   * Enter key triggers immediate submission without locking up
    */
   const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && typedValue.length > 0) {
-      const currentInvoice = expectedDataset[currentIndex];
-      const category: TrainingCategory = currentInvoice?.category || 'tax_number';
-      verifyAndAdvanceSession(typedValue, category);
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (typedValue.length > 0) {
+        const currentInvoice = expectedDataset[currentIndex];
+        const category: TrainingCategory = currentInvoice?.category || 'tax_number';
+        verifyAndAdvanceSession(typedValue, category);
+      }
     }
   };
 
@@ -1335,18 +1410,31 @@ export default function App() {
 
     const durationMs = Math.round(endTimestamp - startTimeRef.current);
     const currentInvoice = expectedDataset[currentIndex];
+    const currentCard = currentInvoice;
+    const expectedValue = (currentCard as any).expectedValue || currentCard.expectedNumber || '';
+    const catLower = String(category || currentCard.category || 'tax_number').toLowerCase();
+    const isDateCategory = catLower === 'date_number' || catLower === 'date';
+    const isTaxCategory = catLower === 'tax_number' || catLower === 'tax';
+    const isPhoneCategory = catLower === 'phone_number' || catLower === 'phone';
 
     // Sanitize values for comparison
-    const sanitizedExpected = currentInvoice.expectedNumber.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const sanitizedExpected = expectedValue.toLowerCase().replace(/[^a-z0-9]/g, '');
     const sanitizedTyped = typedText.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const expDigits = sanitizedExpected.replace(/\D/g, '');
+    const typDigits = sanitizedTyped.replace(/\D/g, '');
 
     let isCorrect = false;
-    if (category === 'tax_number') {
-      isCorrect = (sanitizedExpected === sanitizedTyped) || 
-        (sanitizedExpected.endsWith(sanitizedTyped) && sanitizedTyped.length === 13);
-    } else if (category === 'date_number' || category === 'phone_number') {
-      const expDigits = currentInvoice.expectedNumber.replace(/\D/g, '');
-      const typDigits = typedText.replace(/\D/g, '');
+    if (isTaxCategory) {
+      if (expDigits.length === 10) {
+        // 10-digit registration / tax number
+        isCorrect = (expDigits === typDigits);
+      } else {
+        // T + 13 digits (or 13 digits without T)
+        isCorrect = (sanitizedExpected === sanitizedTyped) || 
+          (sanitizedExpected.endsWith(sanitizedTyped) && sanitizedTyped.length === 13) ||
+          (expDigits === typDigits && expDigits.length === 13);
+      }
+    } else if (isDateCategory || isPhoneCategory) {
       isCorrect = (expDigits === typDigits);
     } else {
       isCorrect = (sanitizedExpected === sanitizedTyped);
@@ -2257,12 +2345,47 @@ export default function App() {
         {/* B. ACTIVE WORKSTATION SESSION RUNNING */}
         {isTestActive && expectedDataset[currentIndex] && (() => {
           const currentInvoice = expectedDataset[currentIndex];
+          const currentCard = currentInvoice;
+          if (!(currentCard as any).expectedValue) {
+            (currentCard as any).expectedValue = currentInvoice.expectedNumber;
+          }
+          const expectedValue = (currentCard as any).expectedValue || currentCard.expectedNumber || '';
+          const rawCleanExpected = expectedValue.replace(/[^0-9a-zA-Z]/g, '');
+          const expDigitsOnly = expectedValue.replace(/\D/g, '');
+
           const cardCategory = currentInvoice.category || 'tax_number';
-          const targetLength = cardCategory === 'date_number' 
+          const catLower = String(cardCategory).toLowerCase();
+          const isDate = catLower === 'date_number' || catLower === 'date';
+          const isTax = catLower === 'tax_number' || catLower === 'tax';
+          const isPhone = catLower === 'phone_number' || catLower === 'phone';
+
+          const isTenDigitTax = isTax && expDigitsOnly.length === 10;
+
+          // Dynamic required target length
+          let targetLength = 13;
+          if (isDate) {
+            targetLength = 8;
+          } else if (isTenDigitTax) {
+            targetLength = 10;
+          } else if (isTax) {
+            const hasT = rawCleanExpected.toUpperCase().startsWith('T');
+            const typedHasT = typedValue.toUpperCase().startsWith('T');
+            targetLength = (hasT && typedHasT) ? 14 : 13;
+          } else if (isPhone) {
+            targetLength = expDigitsOnly.length || 10;
+          } else {
+            targetLength = rawCleanExpected.length || 10;
+          }
+
+          // Indicator dots count dynamically bound to currentCard.expectedValue.replace(/[^0-9a-zA-Z]/g, '').length
+          const rawExpectedCount = expectedValue.replace(/[^0-9a-zA-Z]/g, '').length;
+          const dotsCount = isDate 
             ? 8 
-            : cardCategory === 'phone_number' 
-            ? (currentInvoice.expectedNumber.replace(/\D/g, '').length || 10) 
-            : (currentInvoice.expectedNumber.startsWith('T') && typedValue.startsWith('T') ? 14 : 13);
+            : isTenDigitTax
+            ? 10
+            : (isTax && !typedValue.toUpperCase().startsWith('T') && rawCleanExpected.toUpperCase().startsWith('T'))
+            ? 13
+            : (rawExpectedCount > 0 ? rawExpectedCount : targetLength);
 
           return (
             <div className="space-y-6 animate-fade-in" id="active-test-container">
@@ -2309,7 +2432,13 @@ export default function App() {
                             Card {currentIndex + 1} / {expectedDataset.length}
                           </span>
                           <span className="text-[10px] font-extrabold px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 uppercase tracking-wider">
-                            {cardCategory === 'date_number' ? '📅 Date (YYYYMMDD)' : cardCategory === 'phone_number' ? '📞 Phone Digits' : '🧾 Tax No (T+13)'}
+                            {isDate 
+                              ? '📅 Date (YYYYMMDD)' 
+                              : isPhone 
+                              ? '📞 Phone Digits' 
+                              : isTenDigitTax
+                              ? '🧾 REGISTRATION / TAX NO (10 DIGITS)'
+                              : '🧾 Tax No (T+13)'}
                           </span>
                         </div>
 
@@ -2373,10 +2502,12 @@ export default function App() {
                     {/* Typing form input container */}
                     <div className="space-y-3 relative">
                       <label htmlFor="numeric-speed-input" className="block text-xs font-bold text-slate-700 uppercase tracking-widest">
-                        {cardCategory === 'date_number' 
+                        {isDate 
                           ? '8-Digit Date (YYYYMMDD)' 
-                          : cardCategory === 'phone_number' 
+                          : isPhone 
                           ? 'Phone Digits (Numbers only)' 
+                          : isTenDigitTax
+                          ? 'REGISTRATION / TAX NO (10 DIGITS)'
                           : 'Tax Number (T + 13 Digits)'}
                       </label>
 
@@ -2395,8 +2526,9 @@ export default function App() {
                           autoCapitalize="characters"
                           spellCheck={false}
                           placeholder={
-                            cardCategory === 'date_number' ? 'YYYYMMDD (e.g. 20260522)' :
-                            cardCategory === 'phone_number' ? '03... / 090...' :
+                            isDate ? 'YYYYMMDD (e.g. 20260406)' :
+                            isPhone ? '03... / 090...' :
+                            isTenDigitTax ? '10 digits (e.g. 0886324959)' :
                             'T... or 13 digits'
                           }
                           className={`w-full py-4 px-5 text-center text-3xl font-bold tracking-[0.2em] font-mono text-slate-800 placeholder:text-slate-300 bg-slate-50 border focus:ring-4 outline-none rounded-xl transition ${
@@ -2414,8 +2546,8 @@ export default function App() {
                       </div>
 
                       {/* Visual tick ribbon */}
-                      <div className="flex justify-center space-x-1 h-1.5">
-                        {Array.from({ length: targetLength }).map((_, idx) => {
+                      <div className="flex justify-center space-x-1 h-1.5 flex-wrap gap-y-1">
+                        {Array.from({ length: dotsCount }).map((_, idx) => {
                           let dotColor = 'bg-slate-100 border border-slate-200';
                           if (idx < typedValue.length) {
                             if (lastCharacterValid === false && idx === typedValue.length - 1) {
@@ -2440,10 +2572,12 @@ export default function App() {
                         Quick Entry Rules:
                       </span>
                       <ul className="space-y-1 text-[11px] leading-relaxed list-disc list-inside">
-                        {cardCategory === 'date_number' ? (
+                        {isDate ? (
                           <li>Enter 8 digits as <strong className="text-slate-800 font-mono">YYYYMMDD</strong> (auto-advances upon 8th digit).</li>
-                        ) : cardCategory === 'phone_number' ? (
+                        ) : isPhone ? (
                           <li>Enter telephone digits only (strictly retains leading 0).</li>
+                        ) : isTenDigitTax ? (
+                          <li>Enter 10 digits as <strong className="text-slate-800 font-mono">REGISTRATION / TAX NO (10 DIGITS)</strong>.</li>
                         ) : (
                           <li>Type <strong className="text-slate-800 font-mono">T + 13 digits</strong> or enter just the 13 numbers.</li>
                         )}
