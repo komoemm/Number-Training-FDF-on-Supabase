@@ -26,7 +26,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return 'my';
   });
 
-  // Dynamically update document html lang attribute
+  // Dynamically update document html lang attribute, title, and meta descriptions based on active language dictionary
   useEffect(() => {
     try {
       document.documentElement.lang = language;
@@ -36,6 +36,42 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       } else {
         document.documentElement.classList.add('lang-en');
         document.documentElement.classList.remove('lang-my');
+      }
+
+      const activeT = translations[language] || translations.my;
+      const dynamicTitle = `${activeT.appTitle} | ${activeT.appSubtitle}`;
+      document.title = dynamicTitle;
+
+      const dynamicDesc = activeT.heroDescription || activeT.appTagline;
+
+      // Update standard meta description
+      const metaDesc = document.querySelector('meta[name="description"]');
+      if (metaDesc) {
+        metaDesc.setAttribute('content', dynamicDesc);
+      }
+
+      // Update Open Graph tags
+      const ogTitle = document.querySelector('meta[property="og:title"]');
+      if (ogTitle) {
+        ogTitle.setAttribute('content', dynamicTitle);
+      }
+      const ogDesc = document.querySelector('meta[property="og:description"]');
+      if (ogDesc) {
+        ogDesc.setAttribute('content', dynamicDesc);
+      }
+      const ogLocale = document.querySelector('meta[property="og:locale"]');
+      if (ogLocale) {
+        ogLocale.setAttribute('content', language === 'my' ? 'my_MM' : 'en_US');
+      }
+
+      // Update Twitter Card tags
+      const twTitle = document.querySelector('meta[name="twitter:title"]');
+      if (twTitle) {
+        twTitle.setAttribute('content', dynamicTitle);
+      }
+      const twDesc = document.querySelector('meta[name="twitter:description"]');
+      if (twDesc) {
+        twDesc.setAttribute('content', dynamicDesc);
       }
     } catch {
       // Ignore if document not accessible

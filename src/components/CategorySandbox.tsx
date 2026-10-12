@@ -170,6 +170,8 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvFileInputRef = useRef<HTMLInputElement>(null);
   const zipFileInputRef = useRef<HTMLInputElement>(null);
+  const reviewerModalRef = useRef<HTMLDivElement>(null);
+  const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [showRules, setShowRules] = useState<boolean>(false);
@@ -441,6 +443,56 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
       setModalIssuer(activeReviewItem.issuer || activeReviewItem.companyName || '');
     }
   }, [activeReviewItemId, category]);
+
+  // WCAG 2.1 AA Focus Trap & ESC key to dismiss Reviewer Modal
+  useEffect(() => {
+    if (reviewerModalIndex === null) {
+      if (previouslyFocusedElementRef.current) {
+        previouslyFocusedElementRef.current.focus();
+        previouslyFocusedElementRef.current = null;
+      }
+      return;
+    }
+
+    // Save previous active element for restoration on close
+    previouslyFocusedElementRef.current = document.activeElement as HTMLElement;
+
+    const handleModalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setReviewerModalIndex(null);
+        return;
+      }
+
+      if (e.key === 'Tab' && reviewerModalRef.current) {
+        const focusableElements = reviewerModalRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+        const focusable: HTMLElement[] = Array.from(focusableElements).filter(
+          (el): el is HTMLElement => (el as HTMLElement).offsetParent !== null
+        );
+        if (focusable.length === 0) return;
+
+        const firstEl = focusable[0];
+        const lastEl = focusable[focusable.length - 1];
+
+        if (e.shiftKey) {
+          if (document.activeElement === firstEl) {
+            e.preventDefault();
+            lastEl.focus();
+          }
+        } else {
+          if (document.activeElement === lastEl) {
+            e.preventDefault();
+            firstEl.focus();
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleModalKeyDown);
+    return () => window.removeEventListener('keydown', handleModalKeyDown);
+  }, [reviewerModalIndex]);
 
   /**
    * Helper to fetch Blob for ZIP creation
@@ -1049,8 +1101,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               <button
                 type="button"
                 onClick={() => setShowRules(false)}
-                className="text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 border border-indigo-200 px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0"
+                className="text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 border border-indigo-200 px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
                 aria-expanded={true}
+                aria-controls="sandbox-rules-panel"
+                aria-label="Hide entry rules and SLA guidelines"
               >
                 ✕ Hide Rules
               </button>
@@ -1058,8 +1112,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               <button
                 type="button"
                 onClick={() => setShowRules(true)}
-                className="text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 border border-indigo-200 px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0"
+                className="text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 border border-indigo-200 px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
                 aria-expanded={false}
+                aria-controls="sandbox-rules-panel"
+                aria-label="Show entry rules and SLA guidelines"
               >
                 📖 Show Entry Rules & SLA Guidelines
               </button>
@@ -1070,10 +1126,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
       {/* Guidelines Cards (Collapsible) */}
       {showRules && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 p-4 bg-slate-50/90 rounded-2xl border border-slate-200 shadow-2xs transition-all duration-200 animate-fade-in">
+        <div id="sandbox-rules-panel" className="grid grid-cols-1 md:grid-cols-2 gap-3.5 p-4 bg-slate-50/90 rounded-2xl border border-slate-200 shadow-2xs transition-all duration-200 animate-fade-in">
           <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-widest flex items-center gap-2">
-              <Bookmark className="w-3.5 h-3.5 text-indigo-600" /> 1. Input Rule
+              <Bookmark className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" /> 1. Input Rule
             </h3>
             <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
               {config.inputRule}
@@ -1082,7 +1138,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
           <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-widest flex items-center gap-2">
-              <Zap className="w-3.5 h-3.5 text-pink-500" /> 2. Auto-Advance
+              <Zap className="w-3.5 h-3.5 text-pink-500" aria-hidden="true" /> 2. Auto-Advance
             </h3>
             <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
               {config.autoAdvance}
@@ -1091,7 +1147,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
           <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-widest flex items-center gap-2">
-              <Clock className="w-3.5 h-3.5 text-indigo-600" /> 3. Performance Timing
+              <Clock className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" /> 3. Performance Timing
             </h3>
             <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
               Timing starts precisely when the image displays on screen (<code className="font-mono text-[11px] bg-slate-50 px-1 rounded border border-slate-200">onLoad</code>) and records on final keystroke.
@@ -1100,7 +1156,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
           <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-widest flex items-center gap-2">
-              <CheckCircle2 className="w-3.5 h-3.5 text-amber-600" /> 4. SLA Benchmark
+              <CheckCircle2 className="w-3.5 h-3.5 text-amber-600" aria-hidden="true" /> 4. SLA Benchmark
             </h3>
             <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
               {config.slaTarget}
@@ -1120,12 +1176,13 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               : 'bg-rose-50 border-rose-300 text-rose-900'
           }`}
           role="alert"
+          aria-live="polite"
         >
           <div className="flex items-start gap-2">
             {toastFeedback.type === 'success' ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" aria-hidden="true" />
             ) : (
-              <AlertCircle className={`w-4 h-4 shrink-0 mt-0.5 ${toastFeedback.type === 'warning' ? 'text-amber-600' : 'text-rose-600'}`} />
+              <AlertCircle className={`w-4 h-4 shrink-0 mt-0.5 ${toastFeedback.type === 'warning' ? 'text-amber-600' : 'text-rose-600'}`} aria-hidden="true" />
             )}
             <div className="space-y-1">
               <p className="font-semibold text-xs leading-relaxed">{toastFeedback.message}</p>
@@ -1143,10 +1200,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
           <button
             type="button"
             onClick={() => setToastFeedback(null)}
-            className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer transition shrink-0"
+            className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer transition shrink-0 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-slate-400"
             aria-label="Dismiss notification"
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
       )}
@@ -1177,11 +1234,20 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
           {/* Upload Dropzone */}
           <div
+            role="button"
+            tabIndex={0}
+            aria-label="Upload custom invoice images. Drop files here or press Enter to browse files"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
             onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
             onDragLeave={() => setIsDragOver(false)}
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
-            className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-150 ${
+            className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-150 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 ${
               isDragOver
                 ? 'border-indigo-500 bg-indigo-50/50 scale-[0.99]'
                 : 'border-slate-300 hover:border-indigo-400 bg-white hover:bg-slate-50/50'
@@ -1194,10 +1260,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               accept="image/png, image/jpeg, image/webp"
               onChange={(e) => e.target.files && handleFiles(e.target.files)}
               className="hidden"
+              aria-label="Choose invoice images to upload"
             />
             <div className="flex flex-col items-center justify-center space-y-2">
               <div className="p-3 bg-indigo-50 text-indigo-600 rounded-full">
-                <Upload className="w-5 h-5" />
+                <Upload className="w-5 h-5" aria-hidden="true" />
               </div>
               <div>
                 <p className="text-xs font-bold text-slate-700">
@@ -1213,30 +1280,48 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
           {/* Optional Defaults Override */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
             <div>
-              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
+              <label 
+                htmlFor="fallback-expected-code"
+                id="label-fallback-expected-code"
+                className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1"
+              >
                 Fallback Expected Code (If filename doesn't contain code)
               </label>
               <input
+                id="fallback-expected-code"
+                name="fallbackExpectedCode"
+                aria-labelledby="label-fallback-expected-code"
                 type="text"
+                inputMode={category === 'phone_number' ? 'tel' : 'numeric'}
+                autoComplete="off"
                 placeholder={config.codePlaceholder}
                 value={customExpectedCode}
                 onChange={(e) => setCustomExpectedCode(category === 'tax_number' ? e.target.value.replace(/^T/i, '') : e.target.value)}
-                className="w-full p-2.5 bg-white border border-slate-200 text-xs text-slate-800 rounded-xl outline-none focus:border-indigo-500 font-mono font-bold"
+                className="w-full p-2.5 bg-white border border-slate-200 text-xs text-slate-800 rounded-xl outline-hidden focus:border-indigo-500 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 font-mono font-bold"
               />
               <p className="text-[10px] text-slate-400 mt-1">
                 {category === 'tax_number' ? "Enter 13 numeric digits (without 'T')" : `Format: ${config.codeLabel}`}
               </p>
             </div>
             <div>
-              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
+              <label 
+                htmlFor="fallback-issuer-name"
+                id="label-fallback-issuer-name"
+                className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1"
+              >
                 Fallback Issuer / Store Name
               </label>
               <input
+                id="fallback-issuer-name"
+                name="fallbackIssuerName"
+                aria-labelledby="label-fallback-issuer-name"
                 type="text"
+                inputMode="text"
+                autoComplete="organization"
                 placeholder="e.g. Aeon Retail Co., Ltd."
                 value={customCompanyName}
                 onChange={(e) => setCustomCompanyName(e.target.value)}
-                className="w-full p-2.5 bg-white border border-slate-200 text-xs text-slate-800 rounded-xl outline-none focus:border-indigo-500"
+                className="w-full p-2.5 bg-white border border-slate-200 text-xs text-slate-800 rounded-xl outline-hidden focus:border-indigo-500 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500"
               />
             </div>
           </div>
@@ -1253,11 +1338,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 <button
                   type="button"
                   onClick={downloadCsvTemplate}
-                  className="text-[9px] bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 border border-indigo-200 text-indigo-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 shadow-2xs"
+                  className="text-[9px] bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 border border-indigo-200 text-indigo-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 shadow-2xs outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
                   title="Download standard CSV label template pre-populated with active pool images"
-                  aria-label="Download CSV Template"
+                  aria-label="Download standard CSV label template pre-populated with active pool images"
                 >
-                  <Download className="w-3 h-3 text-indigo-600" />
+                  <Download className="w-3 h-3 text-indigo-600" aria-hidden="true" />
                   <span>Download CSV Template</span>
                 </button>
 
@@ -1265,11 +1350,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 <button
                   type="button"
                   onClick={() => csvFileInputRef.current?.click()}
-                  className="text-[9px] bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-200 text-emerald-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 shadow-2xs"
+                  className="text-[9px] bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border border-emerald-200 text-emerald-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 shadow-2xs outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1"
                   title="Import CSV labels to batch update expected transcription values"
-                  aria-label="Import CSV Labels"
+                  aria-label="Import CSV labels to batch update expected transcription values"
                 >
-                  <Upload className="w-3 h-3 text-emerald-600" />
+                  <Upload className="w-3 h-3 text-emerald-600" aria-hidden="true" />
                   <span>Import CSV Labels</span>
                 </button>
 
@@ -1279,6 +1364,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                   type="file"
                   accept=".csv, text/csv, application/vnd.ms-excel"
                   className="hidden"
+                  aria-label="Upload CSV labels file"
                   onChange={(e) => {
                     if (e.target.files && e.target.files[0]) {
                       handleCsvImport(e.target.files[0]);
@@ -1292,11 +1378,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                   type="button"
                   onClick={handleExportCategoryZip}
                   disabled={isExportingZip}
-                  className="text-[9px] bg-purple-50 hover:bg-purple-100 active:bg-purple-200 border border-purple-200 text-purple-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 shadow-2xs disabled:opacity-50"
+                  className="text-[9px] bg-purple-50 hover:bg-purple-100 active:bg-purple-200 border border-purple-200 text-purple-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 shadow-2xs disabled:opacity-50 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-1"
                   title="Export complete category ZIP backup including images and manifest.json"
-                  aria-label="Export ZIP Backup"
+                  aria-label="Export complete category ZIP backup"
                 >
-                  <Archive className={`w-3 h-3 text-purple-600 ${isExportingZip ? 'animate-spin' : ''}`} />
+                  <Archive className={`w-3 h-3 text-purple-600 ${isExportingZip ? 'animate-spin' : ''}`} aria-hidden="true" />
                   <span>{isExportingZip ? 'Exporting...' : '📦 EXPORT ZIP BACKUP'}</span>
                 </button>
 
@@ -1305,11 +1391,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                   type="button"
                   onClick={() => zipFileInputRef.current?.click()}
                   disabled={isRestoringZip}
-                  className="text-[9px] bg-amber-50 hover:bg-amber-100 active:bg-amber-200 border border-amber-200 text-amber-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 shadow-2xs disabled:opacity-50"
+                  className="text-[9px] bg-amber-50 hover:bg-amber-100 active:bg-amber-200 border border-amber-200 text-amber-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 shadow-2xs disabled:opacity-50 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-1"
                   title="Restore category images and verified targets from a backup ZIP file"
-                  aria-label="Restore from ZIP"
+                  aria-label="Restore category images and verified targets from a backup ZIP file"
                 >
-                  <FileArchive className={`w-3 h-3 text-amber-600 ${isRestoringZip ? 'animate-spin' : ''}`} />
+                  <FileArchive className={`w-3 h-3 text-amber-600 ${isRestoringZip ? 'animate-spin' : ''}`} aria-hidden="true" />
                   <span>{isRestoringZip ? 'Restoring...' : '📥 RESTORE FROM ZIP'}</span>
                 </button>
 
@@ -1319,6 +1405,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                   type="file"
                   accept=".zip, application/zip, application/x-zip-compressed"
                   className="hidden"
+                  aria-label="Upload ZIP backup archive file"
                   onChange={(e) => {
                     if (e.target.files && e.target.files[0]) {
                       handleRestoreCategoryZip(e.target.files[0]);
@@ -1335,10 +1422,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                       loadPoolImages(invoices);
                     }}
                     disabled={isRefreshingPool}
-                    className="text-[9px] bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 disabled:opacity-50"
+                    className="text-[9px] bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 disabled:opacity-50 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-1"
                     title="Force refresh custom invoice pool from Supabase"
+                    aria-label="Force refresh custom invoice pool from database"
                   >
-                    <RefreshCw className={`w-3 h-3 ${isRefreshingPool ? 'animate-spin text-indigo-600' : ''}`} />
+                    <RefreshCw className={`w-3 h-3 ${isRefreshingPool ? 'animate-spin text-indigo-600' : ''}`} aria-hidden="true" />
                     <span>Sync/Refresh Pool</span>
                   </button>
                 )}
@@ -1346,9 +1434,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 {/* 6. Populate Sample Image Button */}
                 <button
                   onClick={() => onAddSample(category)}
-                  className="text-[9px] bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1"
+                  className="text-[9px] bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
+                  aria-label="Populate sample receipt image into category pool"
                 >
-                  <Plus className="w-3 h-3" /> Populate Sample Image
+                  <Plus className="w-3 h-3" aria-hidden="true" /> Populate Sample Image
                 </button>
 
                 {/* 7. Clear Pool Button */}
@@ -1358,7 +1447,8 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                       onClearPool(category);
                       setPoolItems([]);
                     }}
-                    className="text-[9px] hover:bg-rose-50 border border-transparent text-rose-600 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider"
+                    className="text-[9px] hover:bg-rose-50 border border-transparent text-rose-600 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-1"
+                    aria-label="Clear all images from this category pool"
                   >
                     Clear Pool
                   </button>
@@ -1385,22 +1475,31 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                       <div className="flex items-center gap-2.5 overflow-hidden flex-1 mr-1">
                         {/* Thumbnail with Zoom */}
                         <div 
+                          role="button"
+                          tabIndex={0}
                           onClick={() => setReviewerModalIndex(idx)}
-                          className="w-12 h-10 border border-slate-200 rounded bg-slate-50 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer relative group-hover:border-indigo-300 shadow-sm"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setReviewerModalIndex(idx);
+                            }
+                          }}
+                          className="w-12 h-10 border border-slate-200 rounded bg-slate-50 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer relative group-hover:border-indigo-300 shadow-sm outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500"
                           title="Click to zoom & review in modal"
+                          aria-label={`Open labeling assistant for invoice ${displayTitle}`}
                         >
                           {inv.customImageUrl ? (
                             <img
                               src={inv.customImageUrl}
-                              alt="Invoice thumbnail"
+                              alt={`Thumbnail for ${displayTitle}`}
                               loading="lazy"
                               decoding="async"
                               className="object-cover w-full h-full group-hover:scale-105 transition duration-150"
                             />
                           ) : (
-                            <FileImage className="w-5 h-5 text-slate-400" />
+                            <FileImage className="w-5 h-5 text-slate-400" aria-hidden="true" />
                           )}
-                          <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition duration-150 flex items-center justify-center">
+                          <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition duration-150 flex items-center justify-center" aria-hidden="true">
                             <Plus className="w-3.5 h-3.5 text-white" />
                           </div>
                         </div>
@@ -1409,7 +1508,12 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                         <div className="flex-1 min-w-0 space-y-1">
                           <div className="flex items-center justify-between gap-1">
                             <input
+                              id={`inline-issuer-${inv.id}`}
+                              name={`issuer-${inv.id}`}
                               type="text"
+                              inputMode="text"
+                              autoComplete="organization"
+                              aria-label={`Issuer name for invoice ${displayTitle}`}
                               value={inv.issuer || inv.companyName || ''}
                               placeholder="Issuer Name"
                               onChange={(e) => {
@@ -1424,7 +1528,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                                   (e.target as HTMLInputElement).blur();
                                 }
                               }}
-                              className="w-full text-[10px] font-bold text-slate-700 bg-transparent hover:bg-slate-50 focus:bg-white border-b border-transparent hover:border-slate-300 focus:border-indigo-500 rounded px-1 py-0.5 outline-none transition"
+                              className="w-full text-[10px] font-bold text-slate-700 bg-transparent hover:bg-slate-50 focus:bg-white border-b border-transparent hover:border-slate-300 focus:border-indigo-500 rounded px-1 py-0.5 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 transition"
                               title="Click to edit issuer name (auto-persists on blur/Enter)"
                             />
                             <div className="flex items-center gap-1 shrink-0">
@@ -1441,9 +1545,16 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                             </div>
                           </div>
                           <div className="flex items-center gap-1 pl-1">
-                            <span className="text-[9px] text-indigo-600 font-mono font-bold shrink-0">Target:</span>
+                            <label htmlFor={`inline-target-${inv.id}`} className="text-[9px] text-indigo-600 font-mono font-bold shrink-0">
+                              Target:
+                            </label>
                             <input
+                              id={`inline-target-${inv.id}`}
+                              name={`target-${inv.id}`}
                               type="text"
+                              inputMode={category === 'phone_number' ? 'tel' : 'numeric'}
+                              autoComplete="off"
+                              aria-label={`Expected target number for invoice ${displayTitle}`}
                               value={category === 'tax_number' ? (inv.target || inv.expectedNumber || '').replace(/^T/i, '') : (inv.target || inv.expectedNumber || '')}
                               onChange={(e) => {
                                 const val = category === 'tax_number' ? e.target.value.replace(/^T/i, '') : e.target.value;
@@ -1457,7 +1568,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                                   (e.target as HTMLInputElement).blur();
                                 }
                               }}
-                              className="w-full text-[10px] font-mono text-indigo-700 bg-transparent hover:bg-slate-50 focus:bg-white border-b border-transparent hover:border-slate-300 focus:border-indigo-500 rounded px-1 py-0.5 outline-none font-bold transition tracking-wider uppercase"
+                              className="w-full text-[10px] font-mono text-indigo-700 bg-transparent hover:bg-slate-50 focus:bg-white border-b border-transparent hover:border-slate-300 focus:border-indigo-500 rounded px-1 py-0.5 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 font-bold transition tracking-wider uppercase"
                               title="Click to edit expected transcribed number (auto-persists on blur/Enter)"
                             />
                           </div>
@@ -1469,10 +1580,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                         <button
                           onClick={() => setReviewerModalIndex(idx)}
                           aria-label={`Open labeling assistant for invoice ${displayTitle}`}
-                          className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded cursor-pointer transition"
+                          className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded cursor-pointer transition outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500"
                           title="Open Reviewer Modal"
                         >
-                          <Edit className="w-3.5 h-3.5" />
+                          <Edit className="w-3.5 h-3.5" aria-hidden="true" />
                         </button>
                         <button
                           onClick={() => {
@@ -1480,10 +1591,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                             setPoolItems(prev => prev.filter(p => p.id !== inv.id));
                           }}
                           aria-label={`Remove invoice ${inv.companyName || inv.id} from pool`}
-                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer transition shrink-0"
+                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer transition shrink-0 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-rose-500"
                           title="Remove image from sandbox"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                         </button>
                       </div>
                     </div>
@@ -1517,20 +1628,23 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 type="button"
                 onClick={handleExportCategoryZip}
                 disabled={isExportingZip || sortedPoolItems.length === 0}
-                className="text-xs font-bold text-purple-200 hover:text-white bg-purple-950/60 hover:bg-purple-900 border border-purple-500/30 px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0 disabled:opacity-50"
+                className="text-xs font-bold text-purple-200 hover:text-white bg-purple-950/60 hover:bg-purple-900 border border-purple-500/30 px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0 disabled:opacity-50 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-purple-400 focus-visible:ring-offset-1"
                 title="Download category ZIP backup"
+                aria-label="Export category backup as ZIP"
               >
-                <Archive className={`w-3.5 h-3.5 text-purple-400 ${isExportingZip ? 'animate-spin' : ''}`} />
+                <Archive className={`w-3.5 h-3.5 text-purple-400 ${isExportingZip ? 'animate-spin' : ''}`} aria-hidden="true" />
                 <span>{isExportingZip ? 'Exporting...' : '📦 Export ZIP Backup'}</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setShowPoolCatalog(!showPoolCatalog)}
-                className="text-xs font-bold text-indigo-200 hover:text-white bg-indigo-900/60 hover:bg-indigo-800 border border-indigo-400/30 px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0"
+                className="text-xs font-bold text-indigo-200 hover:text-white bg-indigo-900/60 hover:bg-indigo-800 border border-indigo-400/30 px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 shadow-2xs shrink-0 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-1"
                 aria-expanded={showPoolCatalog}
+                aria-controls="trainee-verified-catalog-list"
+                aria-label={showPoolCatalog ? "Hide verified pool catalog" : `View ${sortedPoolItems.length} verified pool images`}
               >
-                <FileImage className="w-3.5 h-3.5 text-indigo-400" />
+                <FileImage className="w-3.5 h-3.5 text-indigo-400" aria-hidden="true" />
                 <span>{showPoolCatalog ? '✕ Hide Catalog' : `👁️ View Pool Images (${sortedPoolItems.length})`}</span>
               </button>
             </div>
@@ -1538,19 +1652,20 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
           {/* Read-Only Invoice Catalog Pool for Trainee */}
           {showPoolCatalog && (
-            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 shadow-2xs space-y-2.5 animate-fade-in">
+            <div id="trainee-verified-catalog-list" className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 shadow-2xs space-y-2.5 animate-fade-in">
               <div className="flex items-center justify-between border-b border-slate-200 pb-2 flex-wrap gap-2">
                 <span className="text-[10px] uppercase font-bold tracking-widest text-slate-600 flex items-center gap-1.5">
-                  <FileImage className="w-3.5 h-3.5 text-indigo-600" /> Verified Pool Images ({sortedPoolItems.length})
+                  <FileImage className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" /> Verified Pool Images ({sortedPoolItems.length})
                 </span>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={downloadCsvTemplate}
-                    className="text-[9px] bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer transition shadow-2xs"
+                    className="text-[9px] bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer transition shadow-2xs outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
                     title="Export verified labels as CSV template"
+                    aria-label="Download CSV template of verified labels"
                   >
-                    <Download className="w-3 h-3 text-indigo-600" />
+                    <Download className="w-3 h-3 text-indigo-600" aria-hidden="true" />
                     <span>Download CSV Template</span>
                   </button>
                   <span className="text-[9px] bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-0.5 rounded font-bold uppercase tracking-wider">
@@ -1576,22 +1691,31 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                         <div className="flex items-center gap-2 overflow-hidden flex-1 mr-1">
                           {/* Thumbnail with Zoom preview */}
                           <div 
+                            role="button"
+                            tabIndex={0}
                             onClick={() => setReviewerModalIndex(idx)}
-                            className="w-10 h-8 border border-slate-200 rounded bg-slate-50 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer relative group-hover:border-indigo-300 shadow-sm"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                setReviewerModalIndex(idx);
+                              }
+                            }}
+                            className="w-10 h-8 border border-slate-200 rounded bg-slate-50 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer relative group-hover:border-indigo-300 shadow-sm outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500"
                             title="Click to preview receipt image"
+                            aria-label={`Preview invoice image for ${displayTitle}`}
                           >
                             {inv.customImageUrl ? (
                               <img
                                 src={inv.customImageUrl}
-                                alt="Invoice thumbnail"
+                                alt={`Thumbnail for ${displayTitle}`}
                                 loading="lazy"
                                 decoding="async"
                                 className="object-cover w-full h-full group-hover:scale-105 transition duration-150"
                               />
                             ) : (
-                              <FileImage className="w-4 h-4 text-slate-400" />
+                              <FileImage className="w-4 h-4 text-slate-400" aria-hidden="true" />
                             )}
-                            <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition duration-150 flex items-center justify-center">
+                            <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition duration-150 flex items-center justify-center" aria-hidden="true">
                               <Plus className="w-3 h-3 text-white" />
                             </div>
                           </div>
@@ -1620,11 +1744,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                         {/* Preview inspection button */}
                         <button
                           onClick={() => setReviewerModalIndex(idx)}
-                          className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded cursor-pointer transition shrink-0"
+                          className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded cursor-pointer transition shrink-0 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500"
                           title="Preview Full Image"
-                          aria-label="Preview full invoice image"
+                          aria-label={`Preview full invoice image for ${displayTitle}`}
                         >
-                          <FileText className="w-3.5 h-3.5" />
+                          <FileText className="w-3.5 h-3.5" aria-hidden="true" />
                         </button>
                       </div>
                     );
@@ -1648,7 +1772,8 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
             </div>
             <button
               onClick={() => onAddSample(category)}
-              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-xs shrink-0 cursor-pointer shadow-sm transition"
+              aria-label="Add quick sample invoice into training pool"
+              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-xs shrink-0 cursor-pointer shadow-sm transition outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
             >
               + Quick Sample
             </button>
@@ -1656,7 +1781,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         ) : (
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-extrabold text-slate-500 uppercase tracking-widest flex items-center gap-1.5 font-sans">
-              <Zap className="w-3.5 h-3.5 text-indigo-600" /> Assessment Launchpad:
+              <Zap className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" /> Assessment Launchpad:
             </span>
             <span className="text-[10px] text-indigo-600 font-bold font-sans">
               {sortedPoolItems.length} active image{sortedPoolItems.length !== 1 ? 's' : ''} in catalog
@@ -1681,7 +1806,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 <span className="text-[11px] font-mono font-extrabold text-purple-600">180 Invoices</span>
               </div>
               <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5 font-sans">
-                <Zap className={`w-4 h-4 shrink-0 ${sortedPoolItems.length > 0 ? 'text-purple-600 fill-purple-600' : 'text-slate-400'}`} />
+                <Zap className={`w-4 h-4 shrink-0 ${sortedPoolItems.length > 0 ? 'text-purple-600 fill-purple-600' : 'text-slate-400'}`} aria-hidden="true" />
                 <span>⚡ Extreme Endurance (180 Invoices)</span>
               </h4>
               <p className="text-xs text-slate-500 leading-relaxed font-sans">
@@ -1697,14 +1822,14 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               <button
                 onClick={() => onStartTest(category, 'hard_180')}
                 disabled={sortedPoolItems.length === 0}
-                className={`w-full py-2.5 px-3 font-bold rounded-xl transition flex items-center justify-center space-x-1.5 text-xs uppercase tracking-wider font-sans ${
+                className={`w-full py-2.5 px-3 font-bold rounded-xl transition flex items-center justify-center space-x-1.5 text-xs uppercase tracking-wider font-sans outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-2 ${
                   sortedPoolItems.length > 0
                     ? 'bg-purple-700 hover:bg-purple-600 active:bg-purple-800 text-white cursor-pointer shadow-sm hover:shadow-purple-500/20'
                     : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-200 opacity-70 shadow-none'
                 }`}
-                aria-label="Launch 180-Invoice Test"
+                aria-label="Launch 180-Invoice Extreme Endurance Test"
               >
-                <Zap className="w-3.5 h-3.5" />
+                <Zap className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Launch 180-Invoice Test</span>
               </button>
             </div>
@@ -1731,7 +1856,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 <span className="text-[11px] font-mono font-extrabold text-blue-600">90 Invoices</span>
               </div>
               <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5 font-sans">
-                <Trophy className={`w-4 h-4 shrink-0 ${sortedPoolItems.length > 0 ? 'text-blue-600 fill-blue-600' : 'text-slate-400'}`} />
+                <Trophy className={`w-4 h-4 shrink-0 ${sortedPoolItems.length > 0 ? 'text-blue-600 fill-blue-600' : 'text-slate-400'}`} aria-hidden="true" />
                 <span>★ Official Assessment (90 Invoices)</span>
               </h4>
               <p className="text-xs text-slate-500 leading-relaxed font-sans">
@@ -1747,14 +1872,14 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               <button
                 onClick={() => onStartTest(category, 'normal_90')}
                 disabled={sortedPoolItems.length === 0}
-                className={`w-full py-2.5 px-3 font-bold rounded-xl transition flex items-center justify-center space-x-1.5 text-xs uppercase tracking-wider font-sans ${
+                className={`w-full py-2.5 px-3 font-bold rounded-xl transition flex items-center justify-center space-x-1.5 text-xs uppercase tracking-wider font-sans outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${
                   sortedPoolItems.length > 0
                     ? 'bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white cursor-pointer shadow-sm hover:shadow-blue-500/20'
                     : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-200 opacity-70 shadow-none'
                 }`}
-                aria-label="Launch 90-Invoice Assessment"
+                aria-label="Launch 90-Invoice Standard Qualification Assessment"
               >
-                <Play className="w-3.5 h-3.5 fill-current" />
+                <Play className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
                 <span>Launch 90-Invoice Assessment</span>
               </button>
             </div>
@@ -1776,7 +1901,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 <span className="text-[11px] font-mono font-extrabold text-emerald-600">20 Invoices</span>
               </div>
               <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5 font-sans">
-                <Play className={`w-4 h-4 shrink-0 ${sortedPoolItems.length > 0 ? 'text-emerald-600 fill-emerald-600' : 'text-slate-400'}`} />
+                <Play className={`w-4 h-4 shrink-0 ${sortedPoolItems.length > 0 ? 'text-emerald-600 fill-emerald-600' : 'text-slate-400'}`} aria-hidden="true" />
                 <span>🎯 Practice Benchmark (20 Invoices)</span>
               </h4>
               <p className="text-xs text-slate-500 leading-relaxed font-sans">
@@ -1792,14 +1917,14 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               <button
                 onClick={() => onStartTest(category, 'easy_20')}
                 disabled={sortedPoolItems.length === 0}
-                className={`w-full py-2.5 px-3 font-bold rounded-xl transition flex items-center justify-center space-x-1.5 text-xs uppercase tracking-wider font-sans ${
+                className={`w-full py-2.5 px-3 font-bold rounded-xl transition flex items-center justify-center space-x-1.5 text-xs uppercase tracking-wider font-sans outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${
                   sortedPoolItems.length > 0
                     ? 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white cursor-pointer shadow-sm hover:shadow-emerald-500/20'
                     : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-200 opacity-70 shadow-none'
                 }`}
-                aria-label="Launch 20-Invoice Benchmark"
+                aria-label="Launch 20-Invoice Practice Benchmark"
               >
-                <Play className="w-3.5 h-3.5 fill-current" />
+                <Play className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
                 <span>Launch 20-Invoice Benchmark</span>
               </button>
             </div>
@@ -1838,11 +1963,13 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
         return (
           <div 
+            ref={reviewerModalRef}
             className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 animate-fade-in"
             id="category-reviewer-modal"
             role="dialog"
             aria-modal="true"
             aria-labelledby="reviewer-modal-title"
+            aria-describedby="reviewer-modal-desc"
           >
             <div className="bg-white rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl border border-slate-200 flex flex-col md:flex-row max-h-[92vh]">
               
@@ -1855,21 +1982,21 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 <button 
                   onClick={() => setReviewerModalIndex(null)}
                   aria-label="Close Reviewer Modal"
-                  className="absolute top-3 right-3 text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-800 transition cursor-pointer"
+                  className="absolute top-3 right-3 text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-800 transition cursor-pointer outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
                 >
-                  <X className="w-5 h-5" />
+                  <X className="w-5 h-5" aria-hidden="true" />
                 </button>
 
                 <div className="flex-1 w-full flex items-center justify-center p-2 mb-3 mt-7 overflow-hidden max-h-[380px]">
                   {currentInv.customImageUrl ? (
                     <img 
                       src={currentInv.customImageUrl} 
-                      alt={`Receipt ${displayIdentifier}`} 
+                      alt={`Receipt image preview for ${displayIdentifier}`} 
                       className="max-h-full max-w-full rounded shadow-md object-contain border border-slate-800"
                     />
                   ) : (
                     <div className="text-center p-6 text-slate-500">
-                      <FileImage className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                      <FileImage className="w-12 h-12 mx-auto mb-2 opacity-50" aria-hidden="true" />
                       <p className="text-xs">No image preview available</p>
                     </div>
                   )}
@@ -1891,7 +2018,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                     <h3 id="reviewer-modal-title" className="text-lg font-bold text-slate-900 font-sans tracking-tight leading-none">
                       Verify & Set Target Values
                     </h3>
-                    <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                    <p id="reviewer-modal-desc" className="text-xs text-slate-500 mt-1 leading-relaxed">
                       {category === 'date_number' 
                         ? 'Verify the strictly 8-digit transaction date (YYYYMMDD) for this receipt image.'
                         : category === 'phone_number'
@@ -1915,7 +2042,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                     <div className="flex items-center gap-1.5 shrink-0">
                       {isItemSynced && (
                         <span className="text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0 animate-fade-in shadow-2xs">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" aria-hidden="true" />
                           ☁️ Synced to DB
                         </span>
                       )}
@@ -1931,7 +2058,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                   <div className="space-y-3">
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-widest">
+                        <label 
+                          htmlFor="modal-expected-target"
+                          id="modal-expected-target-label"
+                          className="block text-[10px] font-bold text-slate-600 uppercase tracking-widest"
+                        >
                           {category === 'date_number'
                             ? 'Expected Date (YYYYMMDD - 8 Digits)'
                             : category === 'phone_number'
@@ -1942,12 +2073,17 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                         </label>
                         {isItemSynced && (
                           <span className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
-                            <Check className="w-2.5 h-2.5" /> Persisted
+                            <Check className="w-2.5 h-2.5" aria-hidden="true" /> Persisted
                           </span>
                         )}
                       </div>
                       <input
+                        id="modal-expected-target"
+                        name="modalExpectedTarget"
+                        aria-labelledby="modal-expected-target-label"
                         type="text"
+                        inputMode={category === 'phone_number' ? 'tel' : 'numeric'}
+                        autoComplete="off"
                         placeholder={
                           category === 'date_number' ? '20260406' :
                           category === 'phone_number' ? '0312345678' :
@@ -1967,7 +2103,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                             handleNextReview();
                           }
                         }}
-                        className="w-full p-2.5 bg-slate-50 border border-slate-300 text-sm text-slate-900 font-mono font-bold rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 tracking-wide text-indigo-700 uppercase"
+                        className="w-full p-2.5 bg-slate-50 border border-slate-300 text-sm text-slate-900 font-mono font-bold rounded-xl outline-hidden focus:bg-white focus:border-indigo-500 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 tracking-wide text-indigo-700 uppercase"
                       />
                       <p className="text-[10px] text-slate-400 mt-1">
                         {category === 'tax_number' 
@@ -1977,11 +2113,20 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-1">
+                      <label 
+                        htmlFor="modal-issuer-name"
+                        id="modal-issuer-name-label"
+                        className="block text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-1"
+                      >
                         Invoice Issuer / Store Name
                       </label>
                       <input
+                        id="modal-issuer-name"
+                        name="modalIssuerName"
+                        aria-labelledby="modal-issuer-name-label"
                         type="text"
+                        inputMode="text"
+                        autoComplete="organization"
                         placeholder="e.g. Aeon Retail Co., Ltd."
                         value={modalIssuer}
                         onChange={(e) => setModalIssuer(e.target.value)}
@@ -1992,7 +2137,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                             handleNextReview();
                           }
                         }}
-                        className="w-full p-2.5 bg-slate-50 border border-slate-300 text-xs text-slate-900 rounded-xl outline-none focus:bg-white focus:border-indigo-500"
+                        className="w-full p-2.5 bg-slate-50 border border-slate-300 text-xs text-slate-900 rounded-xl outline-hidden focus:bg-white focus:border-indigo-500 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500"
                       />
                     </div>
                   </div>
@@ -2004,9 +2149,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                     type="button"
                     onClick={handlePrevReview}
                     disabled={reviewerModalIndex === 0}
-                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-bold transition flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    aria-label="Go to previous invoice image"
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-bold transition flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-1"
                   >
-                    <ChevronLeft className="w-3.5 h-3.5" /> Prev
+                    <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" /> Prev
                   </button>
 
                   <div className="flex items-center gap-2">
@@ -2014,27 +2160,30 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                       type="button"
                       disabled={isSavingCode}
                       onClick={() => handleSaveVerifyCode(modalTarget, modalIssuer, currentInv)}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                      aria-label="Save verified transcription target code to Database & Cache"
+                      className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1"
                       title="Save verified transcription target code to Database & Cache"
                     >
-                      <Save className="w-3.5 h-3.5" />
+                      <Save className="w-3.5 h-3.5" aria-hidden="true" />
                       <span>{isSavingCode ? 'Saving...' : 'Save'}</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => setReviewerModalIndex(null)}
-                      className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition cursor-pointer"
+                      aria-label="Done reviewing and close modal"
+                      className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition cursor-pointer outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-1"
                     >
                       Done
                     </button>
                     <button
                       type="button"
                       onClick={handleNextReview}
-                      className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-xs"
+                      aria-label={reviewerModalIndex < sortedPoolItems.length - 1 ? "Save and proceed to next image" : "Finish review and close modal"}
+                      className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition flex items-center gap-1 cursor-pointer shadow-xs outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
                     >
                       {reviewerModalIndex < sortedPoolItems.length - 1 ? (
-                        <>Next <ChevronRight className="w-3.5 h-3.5" /></>
+                        <>Next <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" /></>
                       ) : (
                         'Finish Review'
                       )}

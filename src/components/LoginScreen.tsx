@@ -147,6 +147,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
                   id="login-username"
                   name="username"
                   type="text"
+                  inputMode="text"
                   placeholder="e.g. admin or guest"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
@@ -157,7 +158,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
                   aria-required="true"
                   aria-invalid={Boolean(errorMsg)}
                   aria-describedby={errorMsg ? "login-error-alert" : undefined}
-                  className="w-full bg-slate-950 text-white placeholder-slate-400 border border-slate-700 hover:border-slate-600 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/40 rounded-xl py-3 pl-10 pr-4 text-sm outline-hidden transition"
+                  className="w-full bg-slate-950 text-white placeholder-slate-400 border border-slate-700 hover:border-slate-600 focus:border-indigo-400 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 rounded-xl py-3 pl-10 pr-4 text-sm transition"
                 />
               </div>
             </div>
@@ -176,6 +177,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
                   id="login-password"
                   name="password"
                   type="password"
+                  inputMode="text"
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -184,7 +186,7 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
                   aria-required="true"
                   aria-invalid={Boolean(errorMsg)}
                   aria-describedby={errorMsg ? "login-error-alert" : undefined}
-                  className="w-full bg-slate-950 text-white placeholder-slate-400 border border-slate-700 hover:border-slate-600 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-400/40 rounded-xl py-3 pl-10 pr-4 text-sm outline-hidden transition"
+                  className="w-full bg-slate-950 text-white placeholder-slate-400 border border-slate-700 hover:border-slate-600 focus:border-indigo-400 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900 rounded-xl py-3 pl-10 pr-4 text-sm transition"
                 />
               </div>
             </div>
@@ -193,7 +195,8 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
             <button
               type="submit"
               id="login-submit-button"
-              className="w-full min-h-[48px] bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-bold p-3 rounded-xl transition flex items-center justify-center space-x-2 cursor-pointer shadow-lg hover:shadow-indigo-500/20 text-xs sm:text-sm uppercase tracking-wider font-sans mt-2 focus-visible:outline-2 focus-visible:outline-indigo-300 focus-visible:ring-2 focus-visible:ring-indigo-400/50"
+              aria-label={`${t.signInBtn} (${t.appTitle})`}
+              className="w-full min-h-[48px] bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-bold p-3 rounded-xl transition flex items-center justify-center space-x-2 cursor-pointer shadow-lg hover:shadow-indigo-500/20 text-xs sm:text-sm uppercase tracking-wider font-sans mt-2 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
             >
               <span>{t.signInBtn}</span>
               <ArrowRight className="w-4 h-4 text-white" aria-hidden="true" />
@@ -219,8 +222,8 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
               <button
                 type="button"
                 onClick={() => handleShortcutLogin('admin', 'admin')}
-                aria-label="Log in as Administrator"
-                className="flex flex-col items-start bg-slate-950 hover:bg-slate-900 border border-slate-700/80 hover:border-indigo-500/80 rounded-xl p-3 text-left transition cursor-pointer text-xs min-h-[54px] focus-visible:outline-2 focus-visible:outline-indigo-300"
+                aria-label="Log in as Administrator (Username: admin, Password: admin)"
+                className="flex flex-col items-start bg-slate-950 hover:bg-slate-900 border border-slate-700/80 hover:border-indigo-500/80 rounded-xl p-3 text-left transition cursor-pointer text-xs min-h-[54px] outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
               >
                 <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1">
                   👑 {t.adminPreset}
@@ -237,8 +240,8 @@ export default function LoginScreen({ onLogin }: LoginScreenProps) {
               <button
                 type="button"
                 onClick={() => handleShortcutLogin('guest', 'guest')}
-                aria-label="Log in as Practice Student"
-                className="flex flex-col items-start bg-slate-950 hover:bg-slate-900 border border-slate-700/80 hover:border-pink-500/80 rounded-xl p-3 text-left transition cursor-pointer text-xs min-h-[54px] focus-visible:outline-2 focus-visible:outline-pink-300"
+                aria-label="Log in as Practice Student (Username: guest, Password: guest)"
+                className="flex flex-col items-start bg-slate-950 hover:bg-slate-900 border border-slate-700/80 hover:border-pink-500/80 rounded-xl p-3 text-left transition cursor-pointer text-xs min-h-[54px] outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-pink-400 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
               >
                 <span className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1">
                   🎓 {t.guestPreset}

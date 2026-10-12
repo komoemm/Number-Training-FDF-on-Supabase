@@ -3,7 +3,9 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig} from 'vite';
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
+  const isProd = mode === 'production' || process.env.NODE_ENV === 'production';
+
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
@@ -11,13 +13,20 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    esbuild: {
+      drop: isProd ? ['console', 'debugger'] : [],
+    },
     build: {
+      sourcemap: false,
+      chunkSizeWarningLimit: 1000,
       rollupOptions: {
         output: {
           manualChunks: {
             'react-vendor': ['react', 'react-dom'],
             'supabase-vendor': ['@supabase/supabase-js'],
             'icons-vendor': ['lucide-react'],
+            'pdf-vendor': ['jspdf'],
+            'zip-vendor': ['jszip'],
           },
         },
       },

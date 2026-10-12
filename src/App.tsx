@@ -20,7 +20,6 @@ import {
   CATEGORY_SLA_CONFIG 
 } from './utils/speedRanking';
 import { GeneratedInvoiceData, TypingDetail, TestSession, TrainingMode, TrainingCategory } from './types';
-import LoginScreen from './components/LoginScreen';
 import LanguageSwitcher from './components/LanguageSwitcher';
 import { useLanguage } from './context/LanguageContext';
 import { 
@@ -38,15 +37,16 @@ function formatMinutesSeconds(totalMs: number): string {
 }
 
 // Lazy-loaded heavy components to optimize initial bundle size, LCP, and INP
+const LoginScreen = lazy(() => import('./components/LoginScreen'));
 const CategorySandbox = lazy(() => import('./components/CategorySandbox').then(m => ({ default: m.default || m.CategorySandbox })));
 const StatsPanel = lazy(() => import('./components/StatsPanel'));
 const HistoryLogs = lazy(() => import('./components/HistoryLogs'));
 const InvoiceViewer = lazy(() => import('./components/InvoiceViewer'));
 
 /**
- * Accessible minimal fallback loading spinner using Tailwind CSS
+ * Accessible minimal fallback loading spinner using Tailwind CSS for Suspense fallbacks
  */
-function LoadingFallback({ 
+export function LoadingSpinner({ 
   message = 'Loading component...',
   className = 'p-8 min-h-[140px]'
 }: { 
@@ -71,6 +71,8 @@ function LoadingFallback({
     </div>
   );
 }
+
+const LoadingFallback = LoadingSpinner;
 
 export default function App() {
   const { t, language } = useLanguage();
@@ -1705,10 +1707,12 @@ export default function App() {
   // If user is not authenticated locally, show Login Screen
   if (!currentOfflineUser) {
     return (
-      <LoginScreen 
-        onLogin={handleOfflineLogin}
-        localUsers={localUsers}
-      />
+      <Suspense fallback={<LoadingSpinner message="Loading authentication portal..." className="min-h-screen bg-slate-900 border-none rounded-none" />}>
+        <LoginScreen 
+          onLogin={handleOfflineLogin}
+          localUsers={localUsers}
+        />
+      </Suspense>
     );
   }
 
@@ -1982,7 +1986,7 @@ export default function App() {
                       </p>
                     </div>
 
-                    <Suspense fallback={<LoadingFallback message="Loading invoice training sandbox..." className="p-12 min-h-[320px]" />}>
+                    <Suspense fallback={<LoadingSpinner message="Loading invoice training sandbox..." className="p-12 min-h-[320px]" />}>
                       <CategorySandbox
                         category="tax_number"
                         invoices={customInvoices}
@@ -2390,7 +2394,7 @@ export default function App() {
           return (
             <div className="space-y-6 animate-fade-in" id="active-test-container">
               {/* Real-time stats header banner */}
-              <Suspense fallback={<LoadingFallback message="Loading performance telemetry..." className="p-4 min-h-[90px]" />}>
+              <Suspense fallback={<LoadingSpinner message="Loading performance telemetry..." className="p-4 min-h-[90px]" />}>
                 <StatsPanel
                   currentIndex={currentIndex}
                   totalCount={expectedDataset.length}
@@ -2412,7 +2416,7 @@ export default function App() {
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
                 {/* Left Column: Image Scan Workstation */}
                 <div className="lg:col-span-7">
-                  <Suspense fallback={<LoadingFallback message="Loading invoice scanner..." className="p-12 min-h-[420px]" />}>
+                  <Suspense fallback={<LoadingSpinner message="Loading invoice scanner..." className="p-12 min-h-[420px]" />}>
                     <InvoiceViewer
                       currentInvoice={currentInvoice}
                       onImageLoaded={handleInvoiceImageOnLoad}
@@ -2888,7 +2892,7 @@ export default function App() {
         })()}
 
         {/* 3. Bottom Section: Historical logs */}
-        <Suspense fallback={<LoadingFallback message="Loading session benchmarks..." className="p-12 min-h-[260px]" />}>
+        <Suspense fallback={<LoadingSpinner message="Loading session benchmarks..." className="p-12 min-h-[260px]" />}>
           <HistoryLogs 
             userId={currentOfflineUser ? currentOfflineUser.username : 'guest'} 
             refreshTrigger={refreshTrigger}

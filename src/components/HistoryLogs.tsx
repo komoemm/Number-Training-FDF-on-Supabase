@@ -7,8 +7,6 @@ import React, { useState, useEffect } from 'react';
 import { supabase, isSupabaseActive } from '../supabase';
 import { Clock, RefreshCw, Layers, Database, ChevronDown, ChevronUp, CheckCircle, XCircle, Trash2, Filter, Key, ShieldAlert, Trophy, Award, TrendingUp, Download } from 'lucide-react';
 import { TestSession, TypingDetail, TrainingCategory } from '../types';
-import { generateCertificatePDF } from '../utils/pdfGenerator';
-import { generateCertificateHTML } from '../utils/htmlGenerator';
 import { evaluateCategoryLevel, getCategoryRankDetails } from '../utils/speedRanking';
 import { SpeedDashboard } from './StatsPanel';
 
@@ -724,10 +722,11 @@ export default function HistoryLogs({ userId, refreshTrigger, isAdmin = false }:
                                 );
                               })()}
                               <button
-                                onClick={(e) => {
+                                onClick={async (e) => {
                                   e.stopPropagation();
                                   const rankDetails = getCategoryRankDetails(session.averageTimeMs, sessionCat);
-                                  generateCertificatePDF(session, rankDetails.level, rankDetails.name);
+                                  const { generateCertificatePDF } = await import('../utils/pdfGenerator');
+                                  await generateCertificatePDF(session, rankDetails.level, rankDetails.name);
                                 }}
                                 aria-label={`Download PDF Performance Certificate for session taken by ${session.userId}`}
                                 className="p-1 px-2 rounded text-emerald-700 bg-emerald-50 hover:text-emerald-800 hover:bg-emerald-100 border border-emerald-150 transition cursor-pointer flex items-center gap-1 text-[10px] font-sans font-bold uppercase shrink-0"
@@ -737,9 +736,10 @@ export default function HistoryLogs({ userId, refreshTrigger, isAdmin = false }:
                                 <span className="hidden sm:inline">PDF</span>
                               </button>
                               <button
-                                onClick={(e) => {
+                                onClick={async (e) => {
                                   e.stopPropagation();
                                   const rankDetails = getCategoryRankDetails(session.averageTimeMs, sessionCat);
+                                  const { generateCertificateHTML } = await import('../utils/htmlGenerator');
                                   generateCertificateHTML(session, rankDetails.level, rankDetails.name);
                                 }}
                                 aria-label={`Download HTML Evidence Certificate for session taken by ${session.userId}`}
