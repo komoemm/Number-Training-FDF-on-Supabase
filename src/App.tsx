@@ -1886,33 +1886,8 @@ export default function App() {
                           </button>
                         </div>
 
-                        {/* Deck composition counts */}
-                        <div className="pt-4 border-t border-indigo-800/60 grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs font-mono">
-                          <div className="bg-slate-800/80 border border-indigo-500/20 p-2.5 rounded-xl">
-                            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">🧾 {t.taxNumbersLabel}</span>
-                            <span className="text-base font-bold text-white">
-                              {customInvoices.filter(i => (i.category || 'tax_number') === 'tax_number').length} {t.loadedSuffix}
-                            </span>
-                          </div>
-                          <div className="bg-slate-800/80 border border-indigo-500/20 p-2.5 rounded-xl">
-                            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">📅 {t.dateNumbersLabel}</span>
-                            <span className="text-base font-bold text-white">
-                              {customInvoices.filter(i => i.category === 'date_number').length} {t.loadedSuffix}
-                            </span>
-                          </div>
-                          <div className="bg-slate-800/80 border border-indigo-500/20 p-2.5 rounded-xl">
-                            <span className="text-slate-400 text-[10px] uppercase font-sans block font-semibold">📞 {t.phoneNumbersLabel}</span>
-                            <span className="text-base font-bold text-white">
-                              {customInvoices.filter(i => i.category === 'phone_number').length} {t.loadedSuffix}
-                            </span>
-                          </div>
-                          <div className="bg-emerald-950/70 border border-emerald-500/40 p-2.5 rounded-xl">
-                            <span className="text-emerald-300 text-[10px] uppercase font-sans block font-semibold">🎴 {t.shuffledPoolLabel}</span>
-                            <span className="text-base font-bold text-emerald-400">{t.cardsExactLabel}</span>
-                          </div>
                         </div>
                       </div>
-                    </div>
 
                     {/* Operational Criteria & Standards Matrix */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
