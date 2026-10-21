@@ -46,14 +46,15 @@ interface CategorySandboxProps {
   category: TrainingCategory;
   invoices: (GeneratedInvoiceData & { customImageUrl?: string; title?: string })[];
   onUploadImages: (files: FileList | File[], category: TrainingCategory) => Promise<void>;
-  onAddSample: (category: TrainingCategory) => void;
+  onAddSample?: (category: TrainingCategory) => void;
   onDeleteInvoice: (id: string) => void;
   onUpdateCode: (id: string, newCode: string) => void;
   onUpdateCompany: (id: string, newCompany: string) => void;
   onClearPool: (category: TrainingCategory) => void;
   onOpenLabelingModal: (indexInAll: number) => void;
   allInvoices: (GeneratedInvoiceData & { customImageUrl?: string })[];
-  onStartTest: (category: TrainingCategory, mode: TrainingMode) => void;
+  onStartTest?: (category: TrainingCategory, mode: TrainingMode) => void;
+  onStart100CardTest?: () => void;
   uploadProgressError: string | null;
   customExpectedCode: string;
   setCustomExpectedCode: (val: string) => void;
@@ -150,6 +151,7 @@ export const getCategoryLabel = (cat: TrainingCategory): string => {
 export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   category,
   invoices,
+  allInvoices = [],
   onUploadImages,
   onAddSample,
   onDeleteInvoice,
@@ -157,6 +159,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   onUpdateCompany,
   onClearPool,
   onStartTest,
+  onStart100CardTest,
   uploadProgressError,
   customExpectedCode,
   setCustomExpectedCode,
@@ -1214,7 +1217,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-200 pb-3 gap-2">
             <div>
               <span className="text-[10px] uppercase font-bold tracking-widest text-slate-500 flex items-center gap-1.5">
-                <Upload className="w-4 h-4 text-indigo-600 font-bold" /> Upload Custom Images for Training Pool
+                <Upload className="w-4 h-4 text-indigo-600 font-bold" /> Upload & Manage Images for Start Training (100 Cards)
               </span>
               <p className="text-[11px] text-slate-400 mt-0.5">
                 {config.extractHint}
@@ -1431,16 +1434,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                   </button>
                 )}
 
-                {/* 6. Populate Sample Image Button */}
-                <button
-                  onClick={() => onAddSample(category)}
-                  className="text-[9px] bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 px-2.5 py-1 rounded-md font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
-                  aria-label="Populate sample receipt image into category pool"
-                >
-                  <Plus className="w-3 h-3" aria-hidden="true" /> Populate Sample Image
-                </button>
-
-                {/* 7. Clear Pool Button */}
+                {/* 6. Clear Pool Button */}
                 {sortedPoolItems.length > 0 && (
                   <button
                     onClick={() => {
@@ -1460,7 +1454,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               <div className="border border-slate-200 rounded-xl p-6 text-center bg-white">
                 <p className="text-slate-400 text-xs font-semibold">No images in this category pool yet</p>
                 <p className="text-[10px] text-slate-400 mt-1.5 max-w-sm mx-auto leading-relaxed">
-                  Drop your receipt image files above, restore a <strong className="text-amber-700 cursor-pointer hover:underline" onClick={() => zipFileInputRef.current?.click()}>ZIP Backup</strong>, or click <strong className="text-indigo-600 cursor-pointer hover:underline" onClick={() => onAddSample(category)}>Populate Sample Image</strong> to immediately test with generated receipts!
+                  Drop your custom receipt image files above or restore a <strong className="text-indigo-600 cursor-pointer hover:underline" onClick={() => zipFileInputRef.current?.click()}>ZIP Backup</strong> to populate the training pool with custom images.
                 </p>
               </div>
             ) : (
@@ -1606,175 +1600,38 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         </div>
       ) : null}
 
-      {/* 3. Interactive Mode Selector Grid (Launchpad) */}
+      {/* 3. Official 100-Card Speed Training (Exclusively based on Admin Uploaded Custom Images) */}
       <div className="border-t border-slate-150 pt-5 space-y-4">
-        {sortedPoolItems.length === 0 ? (
-          <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-2.5 text-amber-800 text-xs font-medium font-sans">
-            <div className="flex items-center gap-2">
-              <span className="text-base shrink-0">⚠️</span>
-              <span>
-                Upload at least 1 image, restore a <strong className="text-amber-800 underline cursor-pointer" onClick={() => zipFileInputRef.current?.click()}>ZIP Backup</strong>, or click <strong className="text-indigo-700 underline cursor-pointer hover:text-indigo-900" onClick={() => onAddSample(category)}>&quot;Populate Sample Image&quot;</strong> to enable assessments.
-              </span>
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-5 rounded-2xl border border-indigo-500/30 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-400/30">
+              <Zap className="w-3 h-3 text-amber-400" />
+              <span>Official 100-Card Speed Training</span>
             </div>
+            <h4 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+              <span>Admin Verified Training Pool ({allInvoices.filter(i => !!i.customImageUrl).length} Total Uploaded Invoices)</span>
+            </h4>
+            <p className="text-xs text-slate-300 leading-relaxed font-sans max-w-xl">
+              Typing speed assessments run exclusively on uploaded custom receipt images. No program-generated sample receipts are used.
+            </p>
+          </div>
+
+          {onStart100CardTest && (
             <button
-              onClick={() => onAddSample(category)}
-              aria-label="Add quick sample invoice into training pool"
-              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-xs shrink-0 cursor-pointer shadow-sm transition outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1"
+              type="button"
+              onClick={onStart100CardTest}
+              disabled={allInvoices.filter(i => !!i.customImageUrl).length === 0}
+              className={`px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center gap-2 transition cursor-pointer shrink-0 shadow-md outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+                allInvoices.filter(i => !!i.customImageUrl).length > 0
+                  ? 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white hover:scale-[1.02] active:scale-[0.98]'
+                  : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+              }`}
+              aria-label="Start 100-Card Speed Training with Uploaded Custom Images"
             >
-              + Quick Sample
+              <Play className="w-4 h-4 fill-current" />
+              <span>Start 100-Card Training</span>
             </button>
-          </div>
-        ) : (
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-extrabold text-slate-500 uppercase tracking-widest flex items-center gap-1.5 font-sans">
-              <Zap className="w-3.5 h-3.5 text-indigo-600" aria-hidden="true" /> Assessment Launchpad:
-            </span>
-            <span className="text-[10px] text-indigo-600 font-bold font-sans">
-              {sortedPoolItems.length} active image{sortedPoolItems.length !== 1 ? 's' : ''} in catalog
-            </span>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4" id={`launch-grid-${category}`}>
-          {/* Card 1 (Hard 180): Extreme Endurance */}
-          <div className={`border rounded-2xl p-4 flex flex-col justify-between transition-all duration-200 group relative ${
-            sortedPoolItems.length > 0
-              ? 'bg-slate-50/90 hover:bg-slate-50 border-purple-200 hover:border-purple-300 hover:shadow-md hover:shadow-purple-500/5'
-              : 'bg-slate-50/40 border-slate-200 opacity-75'
-          }`}>
-            <div className="space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${
-                  sortedPoolItems.length > 0 ? 'bg-purple-100 text-purple-700 border-purple-200' : 'bg-slate-100 text-slate-400 border-slate-200'
-                }`}>
-                  Master Tier SLA
-                </span>
-                <span className="text-[11px] font-mono font-extrabold text-purple-600">180 Invoices</span>
-              </div>
-              <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5 font-sans">
-                <Zap className={`w-4 h-4 shrink-0 ${sortedPoolItems.length > 0 ? 'text-purple-600 fill-purple-600' : 'text-slate-400'}`} aria-hidden="true" />
-                <span>⚡ Extreme Endurance (180 Invoices)</span>
-              </h4>
-              <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                Full endurance drill (Smart 180-loop queue from {sortedPoolItems.length} loaded catalog images)
-              </p>
-              {sortedPoolItems.length > 0 && (
-                <div className="text-[10px] text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200 font-medium inline-flex items-center gap-1">
-                  <span>♻️ Smart Pool Auto-Shuffling Active (180 Queue)</span>
-                </div>
-              )}
-            </div>
-            <div className="mt-4 pt-3 border-t border-purple-100/80">
-              <button
-                onClick={() => onStartTest(category, 'hard_180')}
-                disabled={sortedPoolItems.length === 0}
-                className={`w-full py-2.5 px-3 font-bold rounded-xl transition flex items-center justify-center space-x-1.5 text-xs uppercase tracking-wider font-sans outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-purple-500 focus-visible:ring-offset-2 ${
-                  sortedPoolItems.length > 0
-                    ? 'bg-purple-700 hover:bg-purple-600 active:bg-purple-800 text-white cursor-pointer shadow-sm hover:shadow-purple-500/20'
-                    : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-200 opacity-70 shadow-none'
-                }`}
-                aria-label="Launch 180-Invoice Extreme Endurance Test"
-              >
-                <Zap className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Launch 180-Invoice Test</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Card 2 (Normal 90): Official Assessment */}
-          <div className={`border-2 rounded-2xl p-4 flex flex-col justify-between transition-all duration-200 group relative ${
-            sortedPoolItems.length > 0
-              ? 'bg-gradient-to-b from-blue-50/70 via-white to-blue-50/40 border-blue-500/60 ring-4 ring-blue-500/10 shadow-sm hover:shadow-lg hover:shadow-blue-500/10'
-              : 'bg-slate-50/40 border-slate-200 opacity-75 ring-0'
-          }`}>
-            {sortedPoolItems.length > 0 && (
-              <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[9px] font-extrabold uppercase tracking-widest px-2.5 py-0.5 rounded-full shadow-sm">
-                ★ Standard Qualification
-              </div>
-            )}
-            <div className="space-y-2.5 mt-1">
-              <div className="flex items-center justify-between">
-                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${
-                  sortedPoolItems.length > 0 ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-slate-100 text-slate-400 border-slate-200'
-                }`}>
-                  ★ Official SLA Standard
-                </span>
-                <span className="text-[11px] font-mono font-extrabold text-blue-600">90 Invoices</span>
-              </div>
-              <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5 font-sans">
-                <Trophy className={`w-4 h-4 shrink-0 ${sortedPoolItems.length > 0 ? 'text-blue-600 fill-blue-600' : 'text-slate-400'}`} aria-hidden="true" />
-                <span>★ Official Assessment (90 Invoices)</span>
-              </h4>
-              <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                Standard qualification benchmark (90 Invoices Queue)
-              </p>
-              {sortedPoolItems.length > 0 && sortedPoolItems.length < 90 && (
-                <div className="text-[10px] text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200 font-medium inline-flex items-center gap-1">
-                  <span>♻️ Smart Pool Auto-Shuffling Active (90 Queue)</span>
-                </div>
-              )}
-            </div>
-            <div className="mt-4 pt-3 border-t border-blue-100">
-              <button
-                onClick={() => onStartTest(category, 'normal_90')}
-                disabled={sortedPoolItems.length === 0}
-                className={`w-full py-2.5 px-3 font-bold rounded-xl transition flex items-center justify-center space-x-1.5 text-xs uppercase tracking-wider font-sans outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${
-                  sortedPoolItems.length > 0
-                    ? 'bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white cursor-pointer shadow-sm hover:shadow-blue-500/20'
-                    : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-200 opacity-70 shadow-none'
-                }`}
-                aria-label="Launch 90-Invoice Standard Qualification Assessment"
-              >
-                <Play className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
-                <span>Launch 90-Invoice Assessment</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Card 3 (Easy 20): Practice Benchmark */}
-          <div className={`border rounded-2xl p-4 flex flex-col justify-between transition-all duration-200 group relative ${
-            sortedPoolItems.length > 0
-              ? 'bg-slate-50/90 hover:bg-slate-50 border-emerald-200 hover:border-emerald-300 hover:shadow-md hover:shadow-emerald-500/5'
-              : 'bg-slate-50/40 border-slate-200 opacity-75'
-          }`}>
-            <div className="space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-wider uppercase border ${
-                  sortedPoolItems.length > 0 ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-slate-100 text-slate-400 border-slate-200'
-                }`}>
-                  Warm-up Drill
-                </span>
-                <span className="text-[11px] font-mono font-extrabold text-emerald-600">20 Invoices</span>
-              </div>
-              <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5 font-sans">
-                <Play className={`w-4 h-4 shrink-0 ${sortedPoolItems.length > 0 ? 'text-emerald-600 fill-emerald-600' : 'text-slate-400'}`} aria-hidden="true" />
-                <span>🎯 Practice Benchmark (20 Invoices)</span>
-              </h4>
-              <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                Rapid practice speed test (20 Invoices Quick Run)
-              </p>
-              {sortedPoolItems.length > 0 && sortedPoolItems.length < 20 && (
-                <div className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 font-medium inline-flex items-center gap-1">
-                  <span>♻️ Smart Pool Auto-Shuffling Active (20 Queue)</span>
-                </div>
-              )}
-            </div>
-            <div className="mt-4 pt-3 border-t border-emerald-100/80">
-              <button
-                onClick={() => onStartTest(category, 'easy_20')}
-                disabled={sortedPoolItems.length === 0}
-                className={`w-full py-2.5 px-3 font-bold rounded-xl transition flex items-center justify-center space-x-1.5 text-xs uppercase tracking-wider font-sans outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${
-                  sortedPoolItems.length > 0
-                    ? 'bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white cursor-pointer shadow-sm hover:shadow-emerald-500/20'
-                    : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-200 opacity-70 shadow-none'
-                }`}
-                aria-label="Launch 20-Invoice Practice Benchmark"
-              >
-                <Play className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
-                <span>Launch 20-Invoice Benchmark</span>
-              </button>
-            </div>
-          </div>
+          )}
         </div>
       </div>
 

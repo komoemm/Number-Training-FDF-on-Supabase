@@ -215,7 +215,7 @@ export default function StatsPanel({
 // Speed Dashboard Component with Easy / Normal / All Modes
 // -------------------------------------------------------------
 
-export type ModeFilter = 'normal_90' | 'hard_180' | 'easy_20' | 'all';
+export type ModeFilter = 'all_in_one_100' | 'all';
 export type CategoryFilter = 'tax_number' | 'phone_number' | 'date_number' | 'all';
 
 export interface SpeedDashboardProps {
@@ -233,14 +233,14 @@ export function SpeedDashboard({
   formatDate,
   initialCategory
 }: SpeedDashboardProps) {
-  // Requirement 1: Normal Mode (90 Invoices) is the strict DEFAULT view
-  const [activeModeFilter, setActiveModeFilter] = useState<ModeFilter>('normal_90');
+  // 100-Card Speed Training (Custom Uploaded Images) is the strict default view
+  const [activeModeFilter, setActiveModeFilter] = useState<ModeFilter>('all_in_one_100');
   // Category-specific SLA filter: defaults to initialCategory or Tax Number
   const [activeCategoryFilter, setActiveCategoryFilter] = useState<CategoryFilter>(initialCategory || 'tax_number');
 
   const getSessionMode = (session: TestSession): TrainingMode => {
     if (session.trainingMode) return session.trainingMode;
-    // Fallback for legacy documents
+    if (session.totalImagesAttempted === 100) return 'all_in_one_100';
     if (session.totalImagesAttempted > 90) return 'hard_180';
     if (session.totalImagesAttempted > 20) return 'normal_90';
     return 'easy_20';
@@ -430,58 +430,24 @@ export function SpeedDashboard({
               role="tablist"
               aria-label="Speed assessment mode selection"
             >
-              {/* Option 1: Official Training (90 Invoices) [Default] */}
+              {/* Option 1: 100-Card Speed Training [Default] */}
               <button
-                onClick={() => setActiveModeFilter('normal_90')}
+                onClick={() => setActiveModeFilter('all_in_one_100')}
                 role="tab"
-                aria-selected={activeModeFilter === 'normal_90'}
-                aria-label="Official Training (90 Invoices) Mode"
+                aria-selected={activeModeFilter === 'all_in_one_100'}
+                aria-label="100-Card Training Mode"
                 className={`px-3.5 py-1.5 rounded-lg text-xs font-bold font-sans transition flex items-center gap-2 cursor-pointer ${
-                  activeModeFilter === 'normal_90'
-                    ? 'bg-blue-600 text-white font-extrabold shadow-sm shadow-blue-600/20'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-                }`}
-                id="filter-btn-normal"
-              >
-                <span className={`w-2 h-2 rounded-full ${activeModeFilter === 'normal_90' ? 'bg-white animate-pulse' : 'bg-blue-600'}`}></span>
-                <span>🔵 Official Training (90)</span>
-              </button>
-
-              {/* Option 2: Extreme Endurance (180 Invoices) */}
-              <button
-                onClick={() => setActiveModeFilter('hard_180')}
-                role="tab"
-                aria-selected={activeModeFilter === 'hard_180'}
-                aria-label="Extreme Endurance (180 Invoices) Mode"
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold font-sans transition flex items-center gap-2 cursor-pointer ${
-                  activeModeFilter === 'hard_180'
-                    ? 'bg-purple-600 text-white font-extrabold shadow-sm shadow-purple-600/20'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-                }`}
-                id="filter-btn-hard"
-              >
-                <span className={`w-2 h-2 rounded-full ${activeModeFilter === 'hard_180' ? 'bg-white animate-pulse' : 'bg-purple-600'}`}></span>
-                <span>🟣 Extreme Endurance (180)</span>
-              </button>
-
-              {/* Option 3: Practice Benchmark (20 Invoices) */}
-              <button
-                onClick={() => setActiveModeFilter('easy_20')}
-                role="tab"
-                aria-selected={activeModeFilter === 'easy_20'}
-                aria-label="Practice Benchmark (20 Invoices) Mode"
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold font-sans transition flex items-center gap-2 cursor-pointer ${
-                  activeModeFilter === 'easy_20'
+                  activeModeFilter === 'all_in_one_100'
                     ? 'bg-emerald-600 text-white font-extrabold shadow-sm shadow-emerald-600/20'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
                 }`}
-                id="filter-btn-easy"
+                id="filter-btn-100"
               >
-                <span className={`w-2 h-2 rounded-full ${activeModeFilter === 'easy_20' ? 'bg-white animate-pulse' : 'bg-emerald-600'}`}></span>
-                <span>🟢 Practice Benchmark (20)</span>
+                <span className={`w-2 h-2 rounded-full ${activeModeFilter === 'all_in_one_100' ? 'bg-white animate-pulse' : 'bg-emerald-600'}`}></span>
+                <span>💯 100-Card Training (Custom Images)</span>
               </button>
 
-              {/* Option 4: Combined Logs */}
+              {/* Option 2: Combined Logs */}
               <button
                 onClick={() => setActiveModeFilter('all')}
                 role="tab"
@@ -495,7 +461,7 @@ export function SpeedDashboard({
                 id="filter-btn-all"
               >
                 <Globe className="w-3.5 h-3.5" />
-                <span>🌐 All Modes</span>
+                <span>🌐 All Logs</span>
               </button>
 
             </div>
@@ -505,7 +471,7 @@ export function SpeedDashboard({
           <div className="text-[11px] text-slate-500 font-mono flex items-center gap-2.5 px-2">
             <span>
               Active Filter: <strong className="text-slate-800 uppercase font-sans">
-                {activeCategoryFilter === 'all' ? 'All Categories' : categoryConfig.categoryLabel} // {activeModeFilter === 'normal_90' ? '90 Invoices' : activeModeFilter === 'hard_180' ? '180 Invoices' : activeModeFilter === 'easy_20' ? '20 Invoices' : 'Combined'}
+                {activeCategoryFilter === 'all' ? 'All Categories' : categoryConfig.categoryLabel} // {activeModeFilter === 'all_in_one_100' ? '100-Card Training (Admin Images)' : 'All Records'}
               </strong>
             </span>
             <span className="text-slate-300">|</span>

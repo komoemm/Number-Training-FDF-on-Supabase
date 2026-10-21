@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { supabase, isSupabaseActive } from '../supabase';
-import { Clock, RefreshCw, Layers, Database, ChevronDown, ChevronUp, CheckCircle, XCircle, Trash2, Filter, Key, ShieldAlert, Trophy, Award, TrendingUp, Download } from 'lucide-react';
+import { Clock, RefreshCw, Layers, Database, ChevronDown, ChevronUp, CheckCircle, XCircle, Trash2, Filter, Key, ShieldAlert, Trophy, Award, TrendingUp, Download, EyeOff } from 'lucide-react';
 import { TestSession, TypingDetail, TrainingCategory } from '../types';
 import { evaluateCategoryLevel, getCategoryRankDetails } from '../utils/speedRanking';
 import { SpeedDashboard } from './StatsPanel';
@@ -14,9 +14,10 @@ interface HistoryLogsProps {
   userId: string;
   refreshTrigger: number;
   isAdmin?: boolean;
+  onHide?: () => void;
 }
 
-export default function HistoryLogs({ userId, refreshTrigger, isAdmin = false }: HistoryLogsProps) {
+export default function HistoryLogs({ userId, refreshTrigger, isAdmin = false, onHide }: HistoryLogsProps) {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'typing' | 'login'>('dashboard');
   const [sessions, setSessions] = useState<TestSession[]>([]);
   const [loginLogs, setLoginLogs] = useState<any[]>([]);
@@ -557,6 +558,18 @@ export default function HistoryLogs({ userId, refreshTrigger, isAdmin = false }:
             <RefreshCw className={`w-3.5 h-3.5 text-indigo-600 ${loading ? 'animate-spin' : ''}`} />
             <span className="text-[10px] uppercase font-bold text-slate-600 hidden sm:inline">Sync Cloud</span>
           </button>
+
+          {onHide && (
+            <button
+              onClick={onHide}
+              aria-label="Hide Speed Dashboard and Logs"
+              className="p-1.5 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 transition border border-slate-300 cursor-pointer flex items-center gap-1.5 text-xs font-bold"
+              title="Hide panel from view"
+            >
+              <EyeOff className="w-3.5 h-3.5 text-rose-500" />
+              <span className="text-[10px] uppercase font-bold text-slate-700 hidden sm:inline">Hide Panel</span>
+            </button>
+          )}
         </div>
       </div>
 

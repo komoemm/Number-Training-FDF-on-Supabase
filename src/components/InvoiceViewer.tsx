@@ -9,7 +9,7 @@ import { renderReceiptToDataUrl } from '../utils/receiptGenerator';
 import { ZoomIn, ZoomOut, RotateCcw, AlertTriangle, Eye, Sun, Moon } from 'lucide-react';
 
 interface InvoiceViewerProps {
-  currentInvoice: GeneratedInvoiceData & { customImageUrl?: string };
+  currentInvoice: GeneratedInvoiceData & { customImageUrl?: string; title?: string };
   onImageLoaded: () => void;
   isLoading: boolean;
 }
@@ -146,10 +146,12 @@ export default function InvoiceViewer({ currentInvoice, onImageLoaded, isLoading
       {/* Mini Helper Footer */}
       <div className="bg-slate-900 text-slate-400 text-[10px] uppercase tracking-[0.2em] flex justify-between items-center p-3.5 px-5">
         <span>PRELOADING NEXT BUFFER // IMAGE DATA:</span>
-        <span className="text-white font-mono">
-          {currentInvoice.customImageUrl 
-            ? `CUSTOMER_UPLOADED_${currentInvoice.id.toUpperCase()}.png`
-            : `IMG_STYLE_${currentInvoice.style.toUpperCase()}_${currentInvoice.id.toUpperCase()}.png`
+        <span className="text-white font-mono truncate max-w-[280px]">
+          {currentInvoice.title 
+            ? currentInvoice.title.toUpperCase()
+            : currentInvoice.customImageUrl 
+            ? `ADMIN_CUSTOM_${currentInvoice.id.toUpperCase().slice(-16)}.PNG`
+            : `IMG_${currentInvoice.id.toUpperCase().slice(-16)}.PNG`
           }
         </span>
       </div>

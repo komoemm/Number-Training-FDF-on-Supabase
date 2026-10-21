@@ -26,7 +26,8 @@ import {
   Zap, Keyboard, ShieldAlert, CheckCircle2, ChevronRight, ChevronLeft,
   RotateCcw, LogOut, HelpCircle, Trophy, BarChart2, Check, X,
   Clock, Database, Award, Download, Users, FileText, Calendar, Phone,
-  Sparkles, ShieldCheck, AlertCircle, Layers, Play
+  Sparkles, ShieldCheck, AlertCircle, Layers, Play, Eye, EyeOff, Shield,
+  ImagePlus, FolderUp
 } from 'lucide-react';
 
 function formatMinutesSeconds(totalMs: number): string {
@@ -392,10 +393,16 @@ export default function App() {
       const saved = localStorage.getItem('custom_uploaded_invoices');
       if (saved) {
         const parsed = JSON.parse(saved);
-        return parsed.map((item: any) => ({
-          ...item,
-          category: item.category || 'tax_number'
-        }));
+        return parsed
+          .filter((item: any) => {
+            if (!item || !item.customImageUrl) return false;
+            if (typeof item.id === 'string' && (item.id.startsWith('sample_') || item.id.startsWith('custom_sample_') || item.id.includes('_sample_'))) return false;
+            return true;
+          })
+          .map((item: any) => ({
+            ...item,
+            category: item.category || 'tax_number'
+          }));
       }
       return [];
     } catch {
@@ -453,6 +460,8 @@ export default function App() {
   const [cheatTriggerMsg, setCheatTriggerMsg] = useState<string | null>(null);
   const [latestSessionByMe, setLatestSessionByMe] = useState<any>(null);
   const [isRefreshingInvoices, setIsRefreshingInvoices] = useState<boolean>(false);
+  // Admin-only toggle to unhide/hide Speed Dashboard, Trainee Logs, and Login History
+  const [showAdminLogs, setShowAdminLogs] = useState<boolean>(false);
 
   const TEN_MINUTES_MS = 10 * 60 * 1000;
 
@@ -773,8 +782,8 @@ export default function App() {
   }
 
   /**
-   * Aggregates all images/data across Tax Numbers, Date Numbers, and Phone Numbers,
-   * randomly shuffles them using Fisher-Yates, and selects exactly 100 cards for sequential training.
+   * Starts the official 100-Card Speed Training session strictly using Admin uploaded custom images.
+   * Shuffles uploaded images and repeats across the pool to deliver exactly 100 authentic custom cards.
    */
   const startAllInOneTrainingSession = () => {
     setActiveTrainingCategory('all_in_one');
@@ -782,30 +791,30 @@ export default function App() {
     setCheatTriggerMsg(null);
     setSaveError(null);
 
-    // 1. Gather all pool items across all 3 categories
-    const taxPool = customInvoices.filter(i => (i.category || 'tax_number') === 'tax_number');
-    const datePool = customInvoices.filter(i => i.category === 'date_number');
-    const phonePool = customInvoices.filter(i => i.category === 'phone_number');
+    // 1. Gather pool items strictly from authentic custom images uploaded by Admin
+    const isRealUploadedInvoice = (i: GeneratedInvoiceData & { customImageUrl?: string }): i is GeneratedInvoiceData & { customImageUrl: string } => {
+      if (!i || !i.customImageUrl) return false;
+      if (typeof i.id === 'string' && (i.id.startsWith('sample_') || i.id.startsWith('custom_sample_') || i.id.includes('_sample_'))) {
+        return false;
+      }
+      return true;
+    };
 
-    const combinedPool: (GeneratedInvoiceData & { customImageUrl?: string })[] = [
-      ...taxPool,
-      ...datePool,
-      ...phonePool
-    ];
+    const uploadedPool = customInvoices.filter(isRealUploadedInvoice);
 
-    // Ensure a rich, diverse combined pool with at least 120 items across all three categories
-    let seedCount = 1;
-    while (combinedPool.length < 120) {
-      combinedPool.push(generateSampleCustomInvoice('tax_number', seedCount));
-      combinedPool.push(generateSampleCustomInvoice('date_number', seedCount));
-      combinedPool.push(generateSampleCustomInvoice('phone_number', seedCount));
-      seedCount++;
+    if (uploadedPool.length === 0) {
+      setCheatTriggerMsg(
+        language === 'my'
+          ? 'အက်ဒမင်မှ လေ့ကျင့်ရေးအတွက် အမှန်တကယ် ပြေစာပုံများ မထည့်သွင်းရသေးပါ။ ကျေးဇူးပြု၍ "ပုံမှတ်တမ်း & အချက်အလက်များ" (Card Pools) ကဏ္ဍတွင် ပြေစာပုံများ အရင်တင်ပေးပါ။'
+          : 'No custom receipt images uploaded for training pool by Admin yet. Please upload training receipt images in the Card Pools tab to start the 100-card training test.'
+      );
+      return;
     }
 
-    // 2. Fisher-Yates shuffle
-    const shuffled = fisherYatesShuffle(combinedPool);
+    // 2. Fisher-Yates shuffle the admin uploaded custom images
+    const shuffled: (GeneratedInvoiceData & { customImageUrl: string })[] = fisherYatesShuffle(uploadedPool);
 
-    // 3. Select exactly 100 cards
+    // 3. Select exactly 100 cards strictly from the admin's uploaded custom images
     const deck100: (GeneratedInvoiceData & { customImageUrl?: string; expectedValue?: string })[] = [];
     for (let i = 0; i < 100; i++) {
       const item = shuffled[i % shuffled.length];
@@ -838,10 +847,10 @@ export default function App() {
 
     setExpectedDataset(deck100);
 
-    // Map of image URLs
+    // Map of image URLs strictly from the uploaded custom images
     const urls: Record<string, string> = {};
     deck100.forEach(item => {
-      urls[item.id] = item.customImageUrl || renderReceiptToDataUrl(item);
+      urls[item.id] = item.customImageUrl || '';
     });
     setImageUrls(urls);
 
@@ -868,109 +877,10 @@ export default function App() {
   };
 
   /**
-   * Initializes a speed testing session using the uploaded invoices library for a specific category.
-   * (Maintained for Admin Sandbox testing).
+   * Training tests run via 100-card session based on Admin uploaded custom images.
    */
-  const startCategoryTestingSession = (category: TrainingCategory, mode: TrainingMode = 'normal_90') => {
-    setActiveTrainingCategory(category);
-    setTrainingMode(mode);
-    setCheatTriggerMsg(null);
-    setSaveError(null);
-
-    // Filter available invoices for the requested category
-    let pool = customInvoices.filter(inv => (inv.category || 'tax_number') === category);
-
-    // If pool is empty, auto-seed with sample invoices for immediate testing experience
-    if (pool.length === 0) {
-      const seedItems: (GeneratedInvoiceData & { customImageUrl: string })[] = [];
-      for (let i = 1; i <= 5; i++) {
-        const sample = generateSampleCustomInvoice(category, i);
-        seedItems.push(sample);
-      }
-      pool = seedItems;
-      const updatedAll = [...customInvoices, ...seedItems];
-      setCustomInvoices(updatedAll);
-      localStorage.setItem('custom_uploaded_invoices', JSON.stringify(updatedAll));
-    }
-
-    const targetCount = mode === 'hard_180' ? 180 : mode === 'easy_20' ? 20 : 90;
-    let queue: (GeneratedInvoiceData & { customImageUrl?: string })[] = [];
-
-    if (pool.length >= targetCount) {
-      const shuffled = [...pool].sort(() => Math.random() - 0.5);
-      queue = shuffled.slice(0, targetCount);
-    } else {
-      let counter = 0;
-      while (queue.length < targetCount) {
-        const round = [...pool].sort(() => Math.random() - 0.5);
-        for (const item of round) {
-          if (queue.length >= targetCount) break;
-          counter++;
-          queue.push({
-            ...item,
-            category,
-            id: `${item.id}_q${counter}_${Math.random().toString(36).substring(2, 6)}`
-          });
-        }
-      }
-    }
-
-    const sanitizedQueue: (GeneratedInvoiceData & { customImageUrl?: string; expectedValue?: string })[] = [];
-    queue.forEach((item, idx) => {
-      const catLower = String(category || item.category || 'tax_number').toLowerCase();
-      const isDate = catLower === 'date_number' || catLower === 'date';
-      const isTax = catLower === 'tax_number' || catLower === 'tax';
-      let expNum = item.expectedNumber;
-      if (isDate) {
-        const rawDigits = (expNum || '').replace(/\D/g, '');
-        if (rawDigits.length >= 8) {
-          expNum = rawDigits.slice(0, 8);
-        } else {
-          expNum = generateRandomDateNumber();
-        }
-      } else if (isTax) {
-        const rawDigits = (expNum || '').replace(/\D/g, '');
-        if (rawDigits.length === 10) {
-          expNum = rawDigits;
-        } else {
-          expNum = rawDigits.slice(-13).padStart(13, '0');
-        }
-      }
-      sanitizedQueue.push({
-        ...item,
-        category,
-        expectedNumber: expNum,
-        expectedValue: expNum,
-        id: item.id || `card_${idx + 1}_${Date.now()}`
-      });
-    });
-
-    setExpectedDataset(sanitizedQueue);
-    
-    // Map of URLs
-    const urls: Record<string, string> = {};
-    sanitizedQueue.forEach(item => {
-      urls[item.id] = item.customImageUrl || renderReceiptToDataUrl(item);
-    });
-    setImageUrls(urls);
-    
-    setSessionResults([]);
-    setMistakesList([]);
-    setMistakesCount(0);
-    setCorrectCount(0);
-    setAverageTimeMs(0);
-    setSessionTotalTimeMs(0);
-    setCurrentIndex(0);
-    setTypedValue('');
-    setTestComplete(false);
-    setIsConfirmingCancel(false);
-    setShowErrorReview(false);
-    setIsTestActive(true);
-
-    if (queue.length > 1) {
-      const preloadImg = new Image();
-      preloadImg.src = urls[queue[1].id];
-    }
+  const startCategoryTestingSession = (_category?: TrainingCategory, _mode: TrainingMode = 'all_in_one_100') => {
+    startAllInOneTrainingSession();
   };
 
   /**
@@ -1875,19 +1785,72 @@ export default function App() {
                             </p>
                           </div>
 
-                          {/* Instant Start Training Trigger Button */}
-                          <button
-                            onClick={startAllInOneTrainingSession}
-                            id="btn-start-all-in-one"
-                            className="w-full md:w-auto px-7 py-4.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-400 text-white rounded-2xl font-black text-sm sm:text-base tracking-wider uppercase shadow-xl hover:shadow-emerald-500/30 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2.5 cursor-pointer shrink-0 border border-emerald-300/40"
-                          >
-                            <Play className="w-5 h-5 fill-white" />
-                            <span>{t.heroStartBtn}</span>
-                          </button>
+                          {/* Action Buttons in Hero Card: Upload & Manage Images replaces Start Training */}
+                          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
+                            {currentOfflineUser?.role === 'admin' ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveSetupTab('catalog')}
+                                  id="btn-upload-manage-images"
+                                  className="w-full sm:w-auto px-7 py-4.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-400 text-white rounded-2xl font-black text-sm sm:text-base tracking-wider uppercase shadow-xl hover:shadow-emerald-500/30 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2.5 cursor-pointer shrink-0 border border-emerald-300/40"
+                                >
+                                  <ImagePlus className="w-5 h-5" />
+                                  <span>{t.uploadAndManageImagesBtn}</span>
+                                </button>
+
+                                {customInvoices.filter(i => !!i.customImageUrl && !String(i.id).startsWith('sample_')).length > 0 && (
+                                  <button
+                                    onClick={startAllInOneTrainingSession}
+                                    id="btn-start-all-in-one"
+                                    className="w-full sm:w-auto px-6 py-4.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white rounded-2xl font-black text-sm sm:text-base tracking-wider uppercase shadow-xl hover:shadow-indigo-500/30 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2.5 cursor-pointer shrink-0 border border-indigo-400/40"
+                                  >
+                                    <Play className="w-5 h-5 fill-white" />
+                                    <span>{t.heroStartBtn}</span>
+                                  </button>
+                                )}
+                              </>
+                            ) : (
+                              <button
+                                onClick={startAllInOneTrainingSession}
+                                id="btn-start-all-in-one"
+                                className="w-full sm:w-auto px-7 py-4.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-400 text-white rounded-2xl font-black text-sm sm:text-base tracking-wider uppercase shadow-xl hover:shadow-emerald-500/30 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2.5 cursor-pointer shrink-0 border border-emerald-300/40"
+                              >
+                                <Play className="w-5 h-5 fill-white" />
+                                <span>{t.heroStartBtn}</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
 
+                        {/* Pool Status: 100% Based on Uploaded Custom Images */}
+                        <div className="pt-3.5 border-t border-indigo-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="text-slate-300 font-sans text-xs flex items-center gap-1.5">
+                              📸 {language === 'my' ? 'အက်ဒမင် တင်သွင်းထားသော ပုံများ:' : 'Admin Uploaded Training Images:'}
+                            </span>
+                            <span className="text-emerald-400 font-bold font-mono text-sm bg-emerald-950/70 border border-emerald-500/40 px-2.5 py-0.5 rounded-lg">
+                              {customInvoices.filter(i => !!i.customImageUrl && !String(i.id).startsWith('sample_')).length} {language === 'my' ? 'ပုံ' : 'images'}
+                            </span>
+                            <span className="text-[10px] text-indigo-300/80 font-sans hidden md:inline">
+                              (100-Card test strictly uses Admin uploaded images)
+                            </span>
+                          </div>
+
+                          {currentOfflineUser?.role === 'admin' && (
+                            <button
+                              type="button"
+                              onClick={() => setActiveSetupTab('catalog')}
+                              className="text-[11px] text-indigo-300 hover:text-white underline cursor-pointer font-sans self-start sm:self-auto font-medium"
+                            >
+                              {language === 'my' 
+                                ? 'ပုံများ ထည့်သွင်း/စီမံမည် (Upload & Manage Images for Start Training - 100 Cards) ➜' 
+                                : 'Upload & Manage Images for Start Training (100 Cards) ➜'}
+                            </button>
+                          )}
                         </div>
                       </div>
+                    </div>
 
                     {/* Operational Criteria & Standards Matrix */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1967,13 +1930,12 @@ export default function App() {
                         invoices={customInvoices}
                         allInvoices={customInvoices}
                         onUploadImages={handleCustomImagesUpload}
-                        onAddSample={handleAddSampleToCustomList}
                         onDeleteInvoice={handleDeleteCustomInvoice}
                         onUpdateCode={updateCustomInvoiceCode}
                         onUpdateCompany={updateCustomInvoiceCompany}
                         onClearPool={handleClearCategoryPool}
                         onOpenLabelingModal={(idx) => setLabelingModalIndex(idx)}
-                        onStartTest={startCategoryTestingSession}
+                        onStart100CardTest={startAllInOneTrainingSession}
                         uploadProgressError={uploadProgressError}
                         customExpectedCode={customExpectedCode}
                         setCustomExpectedCode={setCustomExpectedCode}
@@ -2866,14 +2828,70 @@ export default function App() {
           );
         })()}
 
-        {/* 3. Bottom Section: Historical logs */}
-        <Suspense fallback={<LoadingSpinner message="Loading session benchmarks..." className="p-12 min-h-[260px]" />}>
-          <HistoryLogs 
-            userId={currentOfflineUser ? currentOfflineUser.username : 'guest'} 
-            refreshTrigger={refreshTrigger}
-            isAdmin={currentOfflineUser?.role === 'admin'}
-          />
-        </Suspense>
+        {/* 3. Bottom Section: Speed Dashboard, Trainee Logs & Login History (Admin Only with Unhide/Hide toggle) */}
+        {currentOfflineUser?.role === 'admin' ? (
+          <div className="space-y-4 animate-fade-in" id="admin-analytics-section">
+            {!showAdminLogs ? (
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-indigo-50 text-indigo-700 rounded-xl border border-indigo-100 shrink-0">
+                    <Shield className="w-5 h-5 text-indigo-600" aria-hidden="true" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs sm:text-sm font-extrabold text-slate-800 flex items-center gap-2">
+                      <span>{language === 'my' ? 'အက်ဒမင် စာရင်းဇယား၊ အမြန်နှုန်းမှတ်တမ်း & ဝင်ရောက်မှုမှတ်တမ်း' : 'Speed Dashboard, Trainee Typing Logs & Login History'}</span>
+                      <span className="text-[10px] bg-indigo-100 text-indigo-700 font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">{t.adminBadge}</span>
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5 font-sans">
+                      {language === 'my' 
+                        ? 'လုံခြုံရေးအရ ပုံမှန်အားဖြင့် ဝှက်ထားပါသည်။ အချက်အလက်များ စစ်ဆေးရန် "Unhide" ခလုတ်ကို နှိပ်ပါ။'
+                        : 'Hidden by default for privacy. Only Admin can check. Click "Unhide" to inspect speed rankings, typing logs, and login audit trails.'}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowAdminLogs(true)}
+                  aria-expanded="false"
+                  aria-controls="admin-history-logs-container"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs uppercase tracking-wider flex items-center gap-2 cursor-pointer shadow-sm transition shrink-0 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500"
+                >
+                  <Eye className="w-4 h-4" aria-hidden="true" />
+                  <span>{language === 'my' ? 'အချက်အလက်များ ဖော်ပြမည် (Unhide)' : 'Unhide Dashboard & Logs'}</span>
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3 animate-fade-in" id="admin-history-logs-container">
+                <div className="flex items-center justify-between bg-slate-900 text-white px-4 py-2.5 rounded-xl border border-slate-800 shadow-sm flex-wrap gap-2">
+                  <span className="text-xs font-bold flex items-center gap-2 font-mono text-indigo-300">
+                    <Eye className="w-4 h-4 text-emerald-400" aria-hidden="true" /> 
+                    <span>ADMIN AUDIT ACTIVE // SPEED DASHBOARD & TRAINEE LOGS UNHIDDEN</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminLogs(false)}
+                    aria-expanded="true"
+                    aria-controls="admin-history-logs-container"
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-slate-400"
+                  >
+                    <EyeOff className="w-3.5 h-3.5 text-rose-400" aria-hidden="true" />
+                    <span>{language === 'my' ? 'ပြန်လည်ဝှက်ထားမည် (Hide)' : 'Hide Dashboard & Logs'}</span>
+                  </button>
+                </div>
+
+                <Suspense fallback={<LoadingSpinner message="Loading session benchmarks..." className="p-12 min-h-[260px]" />}>
+                  <HistoryLogs 
+                    userId={currentOfflineUser ? currentOfflineUser.username : 'admin'} 
+                    refreshTrigger={refreshTrigger}
+                    isAdmin={true}
+                    onHide={() => setShowAdminLogs(false)}
+                  />
+                </Suspense>
+              </div>
+            )}
+          </div>
+        ) : null}
 
       </main>
 

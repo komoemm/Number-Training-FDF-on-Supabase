@@ -136,6 +136,7 @@ export interface Translations {
   heroTitle: string;
   heroDescription: string;
   heroStartBtn: string;
+  uploadAndManageImagesBtn: string;
   taxNumbersLabel: string;
   dateNumbersLabel: string;
   phoneNumbersLabel: string;
@@ -199,7 +200,7 @@ export const translations: Record<Language, Translations> = {
     // Navigation & Tabs
     allInOneSpeedTraining: '⚡ All-In-One အမြန်စာရိုက်လေ့ကျင့်မှု',
     traineeUserAccounts: '👥 ဝန်ထမ်းအကောင့်များ စီမံခန့်ခွဲမှု',
-    categoryImageCatalog: '📁 ပုံမှတ်တမ်း & အချက်အလက်များ',
+    categoryImageCatalog: '📁 Upload & Manage Images for Start Training (100 Cards)',
     benchmarkLeaderboard: '🏆 စံချိန်မှတ်တမ်း & အဆင့်များ',
     loginHistoryLogs: '📜 ဝင်ရောက်မှုမှတ်တမ်းများ',
     quickLivePreview: '👁️ ပုံစံနမူနာ ကြည့်ရှုရန်',
@@ -315,6 +316,7 @@ export const translations: Record<Language, Translations> = {
     heroTitle: 'All-In-One အမြန်နှုန်းလေ့ကျင့်မှု',
     heroDescription: 'ဂျပန် Tax နံပါတ်များ (T+13)၊ ဂဏန်း ၈ လုံး ရက်စွဲများ (YYYYMMDD) နှင့် ဖုန်းနံပါတ်များကို ကတ် ၁၀၀ ဆက်တိုက်လေ့ကျင့်ရန် ပေါင်းစပ်ထားသည်။ တိကျမှုစည်းမျဉ်းများနှင့် SLA အဆင့်များဖြင့် အကဲဖြတ်သည်။',
     heroStartBtn: 'လေ့ကျင့်မှု စတင်မည် (ကတ် ၁၀၀)',
+    uploadAndManageImagesBtn: 'Upload & Manage Images for Start Training (100 Cards)',
     taxNumbersLabel: 'Tax နံပါတ်များ',
     dateNumbersLabel: 'ရက်စွဲနံပါတ်များ',
     phoneNumbersLabel: 'ဖုန်းနံပါတ်များ',
@@ -376,7 +378,7 @@ export const translations: Record<Language, Translations> = {
     // Navigation & Tabs
     allInOneSpeedTraining: '⚡ All-In-One Speed Training',
     traineeUserAccounts: '👥 Trainee User Accounts',
-    categoryImageCatalog: '📁 Category Image Catalog',
+    categoryImageCatalog: '📁 Upload & Manage Images for Start Training (100 Cards)',
     benchmarkLeaderboard: '🏆 Benchmark Leaderboard',
     loginHistoryLogs: '📜 Login History Logs',
     quickLivePreview: '👁️ Quick Live Preview',
@@ -492,6 +494,7 @@ export const translations: Record<Language, Translations> = {
     heroTitle: 'All-In-One Speed Training',
     heroDescription: 'Combines Japanese Qualified Tax Numbers (T+13), 8-digit Dates (YYYYMMDD), and Telephone Contacts into a continuous 100-card sequence. Evaluated with strict accuracy rules and SLA tier targets.',
     heroStartBtn: 'START TRAINING (100 CARDS)',
+    uploadAndManageImagesBtn: 'Upload & Manage Images for Start Training (100 Cards)',
     taxNumbersLabel: 'Tax Numbers',
     dateNumbersLabel: 'Date Numbers',
     phoneNumbersLabel: 'Phone Numbers',
