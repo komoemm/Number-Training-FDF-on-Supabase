@@ -48,6 +48,15 @@ export interface PoolItem extends GeneratedInvoiceData {
   custom_digit_length?: number;
 }
 
+export interface OperationProgress {
+  mode: 'export' | 'restore';
+  current: number;
+  total: number;
+  percent: number;
+  statusText: string;
+  currentFilename?: string;
+}
+
 interface CategorySandboxProps {
   category: TrainingCategory;
   invoices: (GeneratedInvoiceData & { customImageUrl?: string; title?: string })[];
@@ -67,6 +76,7 @@ interface CategorySandboxProps {
   customCompanyName: string;
   setCustomCompanyName: (val: string) => void;
   isAdmin?: boolean;
+  userRole?: string;
   onRefreshPool?: () => Promise<void>;
   isRefreshingPool?: boolean;
   onCategoryChange?: (category: TrainingCategory) => void;
@@ -175,10 +185,14 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   customCompanyName,
   setCustomCompanyName,
   isAdmin = false,
+  userRole,
   onRefreshPool,
   isRefreshingPool = false,
   onCategoryChange
 }) => {
+  // Role-Based Access Control: Admin tools are strictly restricted to admin role
+  const isEffectiveAdmin = userRole ? userRole === 'admin' : (isAdmin === true);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvFileInputRef = useRef<HTMLInputElement>(null);
   const zipFileInputRef = useRef<HTMLInputElement>(null);
@@ -195,9 +209,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   const [poolItems, setPoolItems] = useState<PoolItem[]>([]);
   const [lastSavedId, setLastSavedId] = useState<string | null>(null);
 
-  // ZIP export & restore status
+  // ZIP export & restore status & progress modal
   const [isExportingZip, setIsExportingZip] = useState<boolean>(false);
   const [isRestoringZip, setIsRestoringZip] = useState<boolean>(false);
+  const [operationProgress, setOperationProgress] = useState<OperationProgress | null>(null);
 
   // Modal temporary edit state
   const [modalTarget, setModalTarget] = useState<string>('');
@@ -578,7 +593,23 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
    * - Trigger browser download: `backup_${activeCategory}_${new Date().toISOString().replace(/[:.]/g, '-')}.zip`.
    * - Show success toast: "[Category] ၏ ပုံများနှင့် သတ်မှတ်တန်ဖိုးများ အားလုံးကို ZIP ဖိုင်အဖြစ် ဒေါင်းလုဒ်ဆွဲပြီးပါပြီ။"
    */
+  /**
+   * 3. Full-Fidelity Category-Aware ZIP Export Logic (handleExportCategoryZip):
+   * - Bundles images with JSZip.
+   * - Generates and bundles 'manifest.json' inside the zip root containing full card metadata:
+   *   [{ 'filename': img.name, 'target_value': img.target_value, 'target_digit_length': img.target_digit_length, 'issuer_name': img.issuer_name }]
+   * - Uses asynchronous chunking to prevent UI freezing (Core Web Vitals INP).
+   * - Shows interactive Progress Indicator Modal.
+   */
   const handleExportCategoryZip = async () => {
+    if (!isEffectiveAdmin) {
+      setToastFeedback({
+        type: 'error',
+        message: 'Permission denied: Only Admin users can export backup files.'
+      });
+      return;
+    }
+
     if (sortedPoolItems.length === 0) {
       setToastFeedback({
         type: 'warning',
@@ -589,44 +620,73 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
     const catLabel = getCategoryLabel(category);
     setIsExportingZip(true);
-    setToastFeedback({
-      type: 'success',
-      message: `${catLabel} အတွက် ZIP Backup ဖိုင် ထုတ်ယူနေပါသည်... ခေတ္တစောင့်ပါ။`
+    setOperationProgress({
+      mode: 'export',
+      current: 0,
+      total: sortedPoolItems.length,
+      percent: 5,
+      statusText: `${catLabel} အတွက် ZIP Backup ဖိုင် စတင်ပြင်ဆင်နေပါသည်...`,
+      currentFilename: 'manifest.json'
     });
 
     try {
       const zip = new JSZip();
 
-      // Build manifest.json object
-      const manifest = {
-        version: '1.0',
-        category: category,
-        exportedAt: new Date().toISOString(),
-        totalImages: sortedPoolItems.length,
-        items: sortedPoolItems.map((item) => {
-          const rawTitle = item.title || getItemTitle(item);
-          // Ensure filename has standard extension if missing
-          const filename = /\.[a-z0-9]+$/i.test(rawTitle) ? rawTitle : `${rawTitle}.jpg`;
-          return {
-            filename,
-            image_identifier: normalizeKey(rawTitle),
-            expected_value: item.target ? String(item.target).trim() : '',
-            issuer: item.issuer || item.companyName || ''
-          };
-        })
-      };
+      // Step 2: Full-Fidelity ZIP Export Manifest
+      // Format: [{ 'filename': img.name, 'target_value': img.target_value, 'target_digit_length': img.target_digit_length, 'issuer_name': img.issuer_name }]
+      const manifest = sortedPoolItems.map((item) => {
+        const rawTitle = item.title || getItemTitle(item);
+        const filename = /\.[a-z0-9]+$/i.test(rawTitle) ? rawTitle : `${rawTitle}.jpg`;
+        const cleanTarget = item.target_value || item.target || item.expectedNumber || '';
+        const targetDigitLength = item.target_digits ?? item.custom_digit_length ?? (cleanTarget ? cleanTarget.replace(/\D/g, '').length : 13);
+        const issuerName = item.issuer || item.companyName || '';
+        return {
+          filename,
+          target_value: cleanTarget,
+          target_digit_length: targetDigitLength,
+          issuer_name: issuerName
+        };
+      });
 
       zip.file('manifest.json', JSON.stringify(manifest, null, 2));
 
-      // Add each image file to the root of the ZIP
+      // Add each image file to the root of the ZIP with asynchronous chunking
       for (let i = 0; i < sortedPoolItems.length; i++) {
         const item = sortedPoolItems[i];
-        const manifestItem = manifest.items[i];
-        const blob = await fetchImageBlob(item);
-        if (blob) {
-          zip.file(manifestItem.filename, blob);
+        const manifestItem = manifest[i];
+
+        setOperationProgress({
+          mode: 'export',
+          current: i + 1,
+          total: sortedPoolItems.length,
+          percent: Math.min(94, Math.round(((i + 1) / (sortedPoolItems.length + 1)) * 100)),
+          statusText: `Processing image ${i + 1} of ${sortedPoolItems.length}...`,
+          currentFilename: manifestItem.filename
+        });
+
+        try {
+          const blob = await fetchImageBlob(item);
+          if (blob) {
+            zip.file(manifestItem.filename, blob);
+          }
+        } catch (fetchErr) {
+          console.warn(`Error fetching image blob for ${manifestItem.filename}:`, fetchErr);
+        }
+
+        // Asynchronous chunking: yield to event loop every 3 images to maintain UI responsiveness (INP)
+        if (i % 3 === 0 || i === sortedPoolItems.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 15));
         }
       }
+
+      setOperationProgress({
+        mode: 'export',
+        current: sortedPoolItems.length,
+        total: sortedPoolItems.length,
+        percent: 96,
+        statusText: 'Compressing archive and generating ZIP blob...',
+        currentFilename: 'archive.zip'
+      });
 
       // Generate ZIP blob
       const zipBlob = await zip.generateAsync({
@@ -659,134 +719,313 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
       });
     } finally {
       setIsExportingZip(false);
+      setOperationProgress(null);
     }
   };
 
   /**
-   * 4. Category-Aware ZIP Restore Logic (handleRestoreCategoryZip):
-   * - Load ZIP via JSZip.loadAsync(file).
-   * - Extract and parse 'manifest.json'.
-   * - Validation: switch category if manifest.category !== activeCategory.
-   * - Extract image files matching filenames from manifest.items.
-   * - Generate local ObjectURLs and reconstruct poolItems.
-   * - Batch-upsert all labels into Supabase 'training_labels' table.
-   * - Update localStorage cache for the category.
-   * - Set state poolItems with natural alphanumeric sorting.
-   * - Show Burmese success toast: "ZIP ဖိုင်မှ [Category] ပုံပေါင်း [X] ပုံနှင့် သတ်မှတ်တန်ဖိုးများကို အောင်မြင်စွာ ပြန်လည် ထည့်သွင်းပြီးပါပြီ။"
+   * 4. Full-Fidelity Category-Aware ZIP Restore Logic (handleRestoreCategoryZip):
+   * a. Extracts and parses 'manifest.json' first.
+   * b. Uploads extracted images to Supabase Storage.
+   * c. Inserts or updates corresponding records in Supabase database tables ('custom_invoices' & 'training_labels')
+   *    with their exact target_value and target_digit_length from manifest.json so Admin does not need to re-verify them.
+   * d. Provides fallback extraction if manifest.json is not present (auto-detecting digits from filenames).
+   * - Uses asynchronous chunking to prevent UI freezing (Core Web Vitals INP).
+   * - Displays Progress Indicator Modal during restore.
    */
   const handleRestoreCategoryZip = async (file: File) => {
+    if (!isEffectiveAdmin) {
+      setToastFeedback({
+        type: 'error',
+        message: 'Permission denied: Only Admin users can restore training images.'
+      });
+      return;
+    }
+
     setIsRestoringZip(true);
+    setOperationProgress({
+      mode: 'restore',
+      current: 0,
+      total: 1,
+      percent: 5,
+      statusText: 'Reading backup ZIP archive and inspecting manifest.json...'
+    });
+
     try {
       const zip = await JSZip.loadAsync(file);
-      const manifestFile = zip.file('manifest.json');
-      if (!manifestFile) {
-        setToastFeedback({
-          type: 'error',
-          message: "ZIP ဖိုင်အတွင်း 'manifest.json' ကို မတွေ့ရှိပါ။ (Invalid backup ZIP: missing manifest.json)"
-        });
-        return;
-      }
 
-      const manifestContent = await manifestFile.async('string');
-      const manifest = JSON.parse(manifestContent);
+      // Step a: Extract and parse 'manifest.json' first
+      const manifestFile = zip.file('manifest.json') || zip.file(/(^|\/)manifest\.json$/i)[0];
+      let manifestItems: Array<{
+        filename: string;
+        target_value?: string;
+        expected_value?: string;
+        target_digit_length?: number;
+        target_digits?: number;
+        custom_digit_length?: number;
+        issuer_name?: string;
+        issuer?: string;
+        company_name?: string;
+        companyName?: string;
+      }> | null = null;
 
-      if (!manifest || !Array.isArray(manifest.items)) {
-        throw new Error("Invalid manifest.json: missing 'items' array");
-      }
-
-      // Category Validation & Normalization
-      let targetCategory: TrainingCategory = category;
-      if (manifest.category) {
-        const raw = String(manifest.category).toLowerCase().trim();
-        if (raw === 'date_number' || raw === 'date_entry') {
-          targetCategory = 'date_number';
-        } else if (raw === 'phone_number') {
-          targetCategory = 'phone_number';
-        } else if (raw === 'tax_number') {
-          targetCategory = 'tax_number';
+      if (manifestFile) {
+        try {
+          const manifestContent = await manifestFile.async('string');
+          const parsed = JSON.parse(manifestContent);
+          if (Array.isArray(parsed)) {
+            manifestItems = parsed;
+          } else if (parsed && Array.isArray(parsed.items)) {
+            manifestItems = parsed.items;
+          }
+        } catch (e) {
+          console.warn('Notice parsing manifest.json, falling back to auto-detection:', e);
         }
       }
 
-      // If manifest.category !== activeCategory, automatically switch category
-      if (targetCategory !== category && onCategoryChange) {
-        onCategoryChange(targetCategory);
+      // Step d: Fallback extraction if manifest.json is not present (auto-detecting digits from filenames)
+      if (!manifestItems || manifestItems.length === 0) {
+        const imageEntries = zip.filter((path, entry) => {
+          if (entry.dir) return false;
+          if (path.includes('__MACOSX') || path.startsWith('.')) return false;
+          return /\.(jpe?g|png|webp|gif|bmp|svg)$/i.test(path);
+        });
+
+        if (imageEntries.length === 0) {
+          throw new Error("ZIP ဖိုင်အတွင်း ပုံဖိုင်များ မတွေ့ရှိပါ။ (No image files found in ZIP archive)");
+        }
+
+        manifestItems = imageEntries.map((entry) => {
+          const filename = entry.name.split('/').pop() || entry.name;
+          let target = '';
+          let digits = 13;
+
+          if (category === 'tax_number') {
+            const tMatch = filename.match(/T\d{13}/i);
+            if (tMatch) {
+              target = tMatch[0].replace(/^T/i, '');
+              digits = 13;
+            } else {
+              const d13 = filename.match(/\d{13}/);
+              if (d13) {
+                target = d13[0];
+                digits = 13;
+              } else {
+                const rawDigits = filename.replace(/\D/g, '');
+                target = rawDigits.slice(-13);
+                digits = target.length || 13;
+              }
+            }
+          } else if (category === 'date_number') {
+            const dateMatch = filename.match(/20\d{6}/) || filename.match(/\d{8}/);
+            if (dateMatch) {
+              target = dateMatch[0];
+              digits = 8;
+            } else {
+              const rawDigits = filename.replace(/\D/g, '');
+              target = rawDigits.slice(0, 8);
+              digits = target.length || 8;
+            }
+          } else if (category === 'phone_number') {
+            const phoneMatch = filename.match(/0\d{9,10}/) || filename.match(/\d{10,11}/);
+            if (phoneMatch) {
+              target = phoneMatch[0];
+              digits = target.length;
+            } else {
+              const rawDigits = filename.replace(/\D/g, '');
+              target = rawDigits.slice(0, 11);
+              digits = target.length || 10;
+            }
+          } else {
+            target = filename.replace(/\D/g, '');
+            digits = target.length || 13;
+          }
+
+          const cleanIssuer = filename.replace(/\.[^/.]+$/, '').replace(/[_.\-\d]+/g, ' ').trim() || 'Store Receipt';
+
+          return {
+            filename: entry.name,
+            target_value: target,
+            target_digit_length: digits,
+            issuer_name: cleanIssuer
+          };
+        });
       }
 
+      const totalItems = manifestItems.length;
       const reconstructedItems: PoolItem[] = [];
       const filesToUpload: File[] = [];
-      const dbUpsertRows: any[] = [];
-      const cacheUpdates: Record<string, { expected_value: string; issuer_or_note?: string }> = {};
+      const dbCustomInvoiceRows: any[] = [];
+      const dbTrainingLabelRows: any[] = [];
+      const cacheUpdates: Record<string, any> = {};
 
-      for (let i = 0; i < manifest.items.length; i++) {
-        const m = manifest.items[i];
-        const filename = m.filename || `image_${i + 1}.jpg`;
-        const normalizedKey = m.image_identifier || normalizeKey(filename);
-        const cleanVal = cleanEnteredTarget(m.expected_value || '', targetCategory);
-        const issuerVal = (m.issuer || '').trim();
+      // Asynchronous chunking loop
+      for (let i = 0; i < totalItems; i++) {
+        const m = manifestItems[i];
+        const rawFilename = m.filename || `image_${i + 1}.jpg`;
+        const cleanFilename = rawFilename.split('/').pop() || rawFilename;
 
-        // Extract image file from ZIP (exact match, case-insensitive, or matching basename)
-        let fileInZip = zip.file(filename);
+        setOperationProgress({
+          mode: 'restore',
+          current: i + 1,
+          total: totalItems,
+          percent: Math.min(94, Math.round(((i + 1) / totalItems) * 100)),
+          statusText: `Processing image ${i + 1} of ${totalItems}...`,
+          currentFilename: cleanFilename
+        });
+
+        // Locate file in ZIP
+        let fileInZip = zip.file(rawFilename);
+        if (!fileInZip) {
+          fileInZip = zip.file(cleanFilename);
+        }
         if (!fileInZip) {
           const found = zip.filter((path, f) => !f.dir && (
-            path.toLowerCase() === filename.toLowerCase() ||
-            path.endsWith('/' + filename) ||
-            normalizeKey(path) === normalizedKey
+            path.toLowerCase() === rawFilename.toLowerCase() ||
+            path.toLowerCase().endsWith('/' + cleanFilename.toLowerCase()) ||
+            normalizeKey(path) === normalizeKey(cleanFilename)
           ));
-          if (found.length > 0) {
-            fileInZip = found[0];
+          if (found.length > 0) fileInZip = found[0];
+        }
+
+        if (!fileInZip) {
+          console.warn(`File ${rawFilename} not found in zip, skipping.`);
+          continue;
+        }
+
+        const imgBlob = await fileInZip.async('blob');
+        const restoredFile = new File([imgBlob], cleanFilename, { type: imgBlob.type || 'image/jpeg' });
+        filesToUpload.push(restoredFile);
+
+        // Step b: Upload extracted image to Supabase Storage
+        let finalImageUrl = '';
+        const storagePath = `pool/${Date.now()}_${i}_${cleanFilename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+
+        try {
+          const { data: storageData, error: storageErr } = await supabase.storage
+            .from('invoices')
+            .upload(storagePath, imgBlob, {
+              contentType: imgBlob.type || 'image/jpeg',
+              upsert: true
+            });
+          if (!storageErr && storageData) {
+            const { data: urlData } = supabase.storage
+              .from('invoices')
+              .getPublicUrl(storageData.path || storagePath);
+            if (urlData?.publicUrl) {
+              finalImageUrl = urlData.publicUrl;
+            }
           }
+        } catch (storageErr) {
+          console.warn('Storage upload notice, falling back to data URL:', storageErr);
         }
 
-        let objectUrl = '';
-        if (fileInZip) {
-          const imgBlob = await fileInZip.async('blob');
-          objectUrl = URL.createObjectURL(imgBlob);
-          const restoredFile = new File([imgBlob], filename, { type: imgBlob.type || 'image/jpeg' });
-          filesToUpload.push(restoredFile);
+        // Safe fallback if Supabase storage is offline or mock client
+        if (!finalImageUrl) {
+          finalImageUrl = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = () => resolve(URL.createObjectURL(imgBlob));
+            reader.readAsDataURL(imgBlob);
+          });
         }
 
-        const itemId = `restored_${targetCategory}_${Date.now()}_${i}`;
+        // Calculate exact target_value and target_digit_length
+        const targetDigits = Number(m.target_digit_length ?? m.target_digits ?? m.custom_digit_length) ||
+          (m.target_value ? m.target_value.replace(/\D/g, '').length : 13);
+        const cleanVal = cleanEnteredTarget(m.target_value || m.expected_value || '', category, targetDigits);
+        const issuerVal = (m.issuer_name || m.issuer || m.company_name || m.companyName || cleanFilename.replace(/\.[^/.]+$/, '')).trim();
+        const normalizedKey = normalizeKey(cleanFilename);
+        const itemId = `restored_${category}_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`;
+
         const poolItem: PoolItem = {
           id: itemId,
-          title: filename,
-          customImageUrl: objectUrl,
+          title: cleanFilename,
+          customImageUrl: finalImageUrl,
           target: cleanVal,
           expectedNumber: cleanVal,
+          target_value: cleanVal,
+          target_digits: targetDigits,
+          custom_digit_length: targetDigits,
           issuer: issuerVal,
-          companyName: issuerVal || filename,
-          category: targetCategory,
+          companyName: issuerVal || cleanFilename,
+          category: category,
           isSynced: true,
-          matchedFromCsv: true,
-          matchedIdentifier: filename
+          matchedFromCsv: false
         };
         reconstructedItems.push(poolItem);
 
-        dbUpsertRows.push({
-          category: targetCategory,
+        // Step c: Prepare records for Supabase database tables with exact target_value and target_digit_length
+        dbCustomInvoiceRows.push({
+          id: itemId,
+          category: category,
+          expected_number: cleanVal,
+          target_value: cleanVal,
+          target_digits: targetDigits,
+          custom_digit_length: targetDigits,
+          company_name: issuerVal,
+          invoice_date: new Date().toLocaleDateString('ja-JP'),
+          total_amount: `${(2000 + Math.floor(Math.random() * 8000)).toLocaleString()}円`,
+          difficulty: 'medium',
+          style: 'modern',
+          custom_image_url: finalImageUrl
+        });
+
+        dbTrainingLabelRows.push({
+          category: category,
           image_identifier: normalizedKey,
           expected_value: cleanVal,
+          target_value: cleanVal,
+          target_digits: targetDigits,
+          custom_digit_length: targetDigits,
           issuer_or_note: issuerVal
         });
 
         cacheUpdates[normalizedKey] = {
           expected_value: cleanVal,
+          target_value: cleanVal,
+          target_digits: targetDigits,
+          custom_digit_length: targetDigits,
           issuer_or_note: issuerVal
         };
-      }
 
-      // Batch-upsert all labels into Supabase 'training_labels' table
-      if (dbUpsertRows.length > 0) {
-        try {
-          await supabase.from('training_labels').upsert(dbUpsertRows, {
-            onConflict: 'category,image_identifier'
-          });
-        } catch (err) {
-          console.warn('Supabase batch upsert on restore warning:', err);
+        // Asynchronous chunking to prevent UI freezing (Core Web Vitals INP)
+        if (i % 3 === 0 || i === totalItems - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
         }
       }
 
-      // Update LocalStorage cache for category
-      const cacheKey = `training_labels_cache_${targetCategory}`;
+      setOperationProgress({
+        mode: 'restore',
+        current: totalItems,
+        total: totalItems,
+        percent: 98,
+        statusText: 'Synchronizing records to database and local cache...',
+        currentFilename: 'database.sync'
+      });
+
+      // Upsert into Supabase custom_invoices table
+      if (dbCustomInvoiceRows.length > 0) {
+        try {
+          await supabase.from('custom_invoices').upsert(dbCustomInvoiceRows);
+        } catch (err) {
+          console.warn('Supabase custom_invoices upsert warning:', err);
+        }
+      }
+
+      // Upsert into Supabase training_labels table
+      if (dbTrainingLabelRows.length > 0) {
+        try {
+          await supabase.from('training_labels').upsert(dbTrainingLabelRows, {
+            onConflict: 'category,image_identifier'
+          });
+        } catch (err) {
+          console.warn('Supabase training_labels upsert warning:', err);
+        }
+      }
+
+      // Update LocalStorage mirror cache for category
+      const cacheKey = `training_labels_cache_${category}`;
       try {
         const rawCache = localStorage.getItem(cacheKey);
         const existingMap = rawCache ? JSON.parse(rawCache) : {};
@@ -794,6 +1033,23 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
       } catch (e) {
         console.warn('LocalStorage cache update on restore warning:', e);
       }
+
+      // Update parent invoices pool if onUploadImages is supported
+      if (filesToUpload.length > 0 && onUploadImages) {
+        try {
+          await onUploadImages(filesToUpload, category);
+        } catch (err) {
+          console.warn('Uploading restored files to parent pool warning:', err);
+        }
+      }
+
+      // Propagate target values to parent customInvoices
+      reconstructedItems.forEach((item) => {
+        onUpdateCode(item.id, item.target, item.target_digits);
+        if (item.issuer && onUpdateCompany) {
+          onUpdateCompany(item.id, item.issuer);
+        }
+      });
 
       // Set state poolItems with natural alphanumeric sorting
       reconstructedItems.sort((a, b) => {
@@ -803,24 +1059,16 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
       });
       setPoolItems(reconstructedItems);
 
-      // Upload extracted image files to storage / parent list
-      if (filesToUpload.length > 0 && onUploadImages) {
+      // Trigger parent pool refresh if provided
+      if (onRefreshPool) {
         try {
-          await onUploadImages(filesToUpload, targetCategory);
+          await onRefreshPool();
         } catch (err) {
-          console.warn('Uploading restored files to parent pool warning:', err);
+          console.warn('onRefreshPool warning:', err);
         }
       }
 
-      // Propagate target values to parent customInvoices
-      reconstructedItems.forEach((item) => {
-        onUpdateCode(item.id, item.target);
-        if (item.issuer && onUpdateCompany) {
-          onUpdateCompany(item.id, item.issuer);
-        }
-      });
-
-      const catLabel = getCategoryLabel(targetCategory);
+      const catLabel = getCategoryLabel(category);
       setToastFeedback({
         type: 'success',
         message: `ZIP ဖိုင်မှ ${catLabel} ပုံပေါင်း ${reconstructedItems.length} ပုံနှင့် သတ်မှတ်တန်ဖိုးများကို အောင်မြင်စွာ ပြန်လည် ထည့်သွင်းပြီးပါပြီ။`
@@ -833,6 +1081,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
       });
     } finally {
       setIsRestoringZip(false);
+      setOperationProgress(null);
     }
   };
 
@@ -1262,7 +1511,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
       )}
 
       {/* 2. Admin Upload Pool Section OR Trainee Verified Status Banner */}
-      {isAdmin ? (
+      {isEffectiveAdmin ? (
         <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-200 pb-3 gap-2">
             <div>
@@ -1648,7 +1897,107 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
             )}
           </div>
         </div>
-      ) : null}
+      ) : (
+        <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-200 pb-3 gap-2">
+            <div>
+              <span className="text-[10px] uppercase font-bold tracking-widest text-slate-500 flex items-center gap-1.5">
+                <FileImage className="w-4 h-4 text-emerald-600 font-bold" /> Active Published Training Pool ({sortedPoolItems.length} Cards)
+              </span>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Trainee View: Verified training cards and dynamic digit lengths are automatically synchronized from Supabase backend.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded font-bold uppercase tracking-wider flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Cloud Synchronized Pool
+              </span>
+              {onRefreshPool && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (onRefreshPool) await onRefreshPool();
+                    loadPoolImages(invoices);
+                  }}
+                  disabled={isRefreshingPool}
+                  className="text-[9px] bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 px-2 py-0.5 rounded font-bold cursor-pointer transition uppercase tracking-wider flex items-center gap-1 shadow-2xs outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500"
+                  title="Check for newly verified images from cloud database"
+                >
+                  <RefreshCw className={`w-2.5 h-2.5 ${isRefreshingPool ? 'animate-spin text-indigo-600' : ''}`} aria-hidden="true" />
+                  <span>Sync</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {sortedPoolItems.length === 0 ? (
+            <div className="border border-slate-200 rounded-xl p-6 text-center bg-white">
+              <p className="text-slate-500 text-xs font-semibold">No published cards available in this category yet</p>
+              <p className="text-[11px] text-slate-400 mt-1 max-w-sm mx-auto leading-relaxed">
+                Training cards verified by an Administrator will automatically appear here once synchronized.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[260px] overflow-y-auto pr-1">
+              {sortedPoolItems.map((inv, idx) => {
+                const displayTitle = inv.title || getItemTitle(inv);
+                const targetDigits = inv.target_digits || inv.custom_digit_length || (inv.target ? inv.target.replace(/\D/g, '').length : 13);
+                return (
+                  <div key={inv.id} className="flex bg-white border border-slate-200 rounded-lg p-2.5 items-center justify-between group hover:border-emerald-300 transition shadow-2xs">
+                    <div className="flex items-center gap-2.5 overflow-hidden flex-1 mr-2">
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setReviewerModalIndex(idx)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setReviewerModalIndex(idx);
+                          }
+                        }}
+                        className="w-12 h-10 border border-slate-200 rounded bg-slate-50 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer shadow-2xs group-hover:border-emerald-400"
+                        title="Click to zoom image"
+                      >
+                        {inv.customImageUrl ? (
+                          <img
+                            src={inv.customImageUrl}
+                            alt={`Receipt preview for ${displayTitle}`}
+                            loading="lazy"
+                            decoding="async"
+                            className="object-cover w-full h-full group-hover:scale-105 transition duration-150"
+                          />
+                        ) : (
+                          <FileImage className="w-5 h-5 text-slate-400" />
+                        )}
+                      </div>
+
+                      <div className="flex-1 min-w-0 space-y-0.5">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-[11px] font-bold text-slate-800 truncate" title={inv.issuer || inv.companyName || displayTitle}>
+                            {inv.issuer || inv.companyName || displayTitle}
+                          </span>
+                          <span className="text-[9px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-1 py-0.2 rounded font-bold" title="Verified in Database">
+                            ☁️ Verified
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-[10px]">
+                          <span className="text-slate-400 font-semibold font-mono">Target:</span>
+                          <span className="font-mono font-bold text-indigo-700 tracking-wider">
+                            {inv.target || inv.expectedNumber || '—'}
+                          </span>
+                          <span className="text-[8px] bg-indigo-50 text-indigo-700 px-1.5 py-0.2 rounded font-mono font-bold border border-indigo-200">
+                            {targetDigits} Digits
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 3. Official 100-Card Speed Training (Exclusively based on Admin Uploaded Custom Images) */}
       <div className="border-t border-slate-150 pt-5 space-y-4">
@@ -2040,6 +2389,74 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
           </div>
         );
       })()}
+
+      {/* 4. Progress Indicator Modal during Export/Restore Operations */}
+      {operationProgress && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="operation-progress-title"
+          className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in"
+        >
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className={`p-3 rounded-xl ${operationProgress.mode === 'export' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'} shrink-0`}>
+                {operationProgress.mode === 'export' ? (
+                  <Archive className="w-6 h-6 animate-bounce" aria-hidden="true" />
+                ) : (
+                  <FileArchive className="w-6 h-6 animate-pulse" aria-hidden="true" />
+                )}
+              </div>
+              <div>
+                <h3 id="operation-progress-title" className="text-sm font-bold text-slate-800">
+                  {operationProgress.mode === 'export' ? '📦 Exporting ZIP Backup' : '📥 Restoring Training Pool from ZIP'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {operationProgress.mode === 'export'
+                    ? 'Bundling images and verified manifest.json...'
+                    : 'Extracting images, uploading to storage & syncing target values...'}
+                </p>
+              </div>
+            </div>
+
+            {/* Progress Bar & Counter */}
+            <div className="space-y-1.5">
+              <div className="flex justify-between items-center text-xs font-mono">
+                <span className="text-slate-600 font-semibold truncate max-w-[260px]">{operationProgress.statusText}</span>
+                <span className="text-indigo-600 font-bold ml-2 shrink-0">{operationProgress.percent}%</span>
+              </div>
+              <div
+                role="progressbar"
+                aria-valuenow={operationProgress.percent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                className="w-full bg-slate-100 h-3 rounded-full overflow-hidden p-0.5 border border-slate-200"
+              >
+                <div
+                  className={`h-full rounded-full transition-all duration-150 ease-out ${
+                    operationProgress.mode === 'export'
+                      ? 'bg-gradient-to-r from-purple-500 to-indigo-600'
+                      : 'bg-gradient-to-r from-emerald-500 to-teal-600'
+                  }`}
+                  style={{ width: `${Math.max(4, Math.min(100, operationProgress.percent))}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Current Filename Badge */}
+            {operationProgress.currentFilename && (
+              <div className="bg-slate-50 rounded-lg p-2.5 border border-slate-200 text-[11px] text-slate-600 font-mono truncate flex items-center gap-2">
+                <span className="text-slate-400 shrink-0">Current Item:</span>
+                <span className="font-bold text-slate-700 truncate">{operationProgress.currentFilename}</span>
+              </div>
+            )}
+
+            <p className="text-[10px] text-slate-400 text-center font-sans">
+              Asynchronous chunking active to maintain smooth browser responsiveness. Please keep this tab open.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

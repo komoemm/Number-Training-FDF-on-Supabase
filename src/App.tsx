@@ -171,6 +171,8 @@ export default function App() {
     setCurrentOfflineUser(matched);
     localStorage.setItem('trainer_logged_in_user', JSON.stringify(matched));
     recordLoginHistory(matched.username, matched.role, true);
+    // Trainees and admins automatically load fresh active published pool images & labels from Supabase
+    fetchCustomInvoices(true);
     return { success: true };
   };
 
@@ -696,21 +698,52 @@ export default function App() {
           throw error;
         }
 
+        // Fetch verified training labels to persist full ground truth fidelity across all sessions
+        const labelsLookup = new Map<string, any>();
+        try {
+          const { data: labelsData } = await supabase.from('training_labels').select('*');
+          if (labelsData && Array.isArray(labelsData)) {
+            labelsData.forEach((row: any) => {
+              if (row.image_identifier) {
+                const normKey = String(row.image_identifier).replace(/\.[^/.]+$/, '').trim().toLowerCase();
+                labelsLookup.set(normKey, row);
+              }
+            });
+          }
+        } catch (labelErr) {
+          console.warn('Notice loading training_labels in fetchCustomInvoices:', labelErr);
+        }
+
         if (data && Array.isArray(data)) {
-          const invoices = data.map((row: any) => ({
-            id: row.id,
-            category: row.category,
-            expectedNumber: row.expected_number,
-            target_value: row.target_value || row.expected_number,
-            target_digits: row.target_digits ? Number(row.target_digits) : (row.custom_digit_length ? Number(row.custom_digit_length) : undefined),
-            custom_digit_length: row.custom_digit_length ? Number(row.custom_digit_length) : (row.target_digits ? Number(row.target_digits) : undefined),
-            companyName: row.company_name,
-            invoiceDate: row.invoice_date,
-            totalAmount: row.total_amount,
-            difficulty: row.difficulty,
-            style: row.style,
-            customImageUrl: row.custom_image_url
-          }));
+          const invoices = data.map((row: any) => {
+            const rawTitle = row.company_name || row.id || '';
+            const normKey = String(rawTitle).replace(/\.[^/.]+$/, '').trim().toLowerCase();
+            const matchedLabel = labelsLookup.get(normKey);
+
+            const expectedTarget = matchedLabel?.target_value || matchedLabel?.expected_value || row.target_value || row.expected_number;
+            const targetDigits = matchedLabel?.target_digits
+              ? Number(matchedLabel.target_digits)
+              : (matchedLabel?.custom_digit_length
+                ? Number(matchedLabel.custom_digit_length)
+                : (row.target_digits
+                  ? Number(row.target_digits)
+                  : (row.custom_digit_length ? Number(row.custom_digit_length) : undefined)));
+
+            return {
+              id: row.id,
+              category: row.category,
+              expectedNumber: expectedTarget,
+              target_value: expectedTarget,
+              target_digits: targetDigits,
+              custom_digit_length: targetDigits,
+              companyName: matchedLabel?.issuer_or_note || row.company_name,
+              invoiceDate: row.invoice_date,
+              totalAmount: row.total_amount,
+              difficulty: row.difficulty,
+              style: row.style,
+              customImageUrl: row.custom_image_url
+            };
+          });
           if (invoices.length > 0) {
             setCustomInvoices(invoices);
             try {
@@ -1912,7 +1945,8 @@ export default function App() {
                         setCustomExpectedCode={setCustomExpectedCode}
                         customCompanyName={customCompanyName}
                         setCustomCompanyName={setCustomCompanyName}
-                        isAdmin={true}
+                        isAdmin={currentOfflineUser?.role === 'admin'}
+                        userRole={currentOfflineUser?.role || 'trainee'}
                         onRefreshPool={() => fetchCustomInvoices(true)}
                         isRefreshingPool={isRefreshingInvoices}
                       />
