@@ -982,73 +982,92 @@ export default function App() {
 
     const newItems: (GeneratedInvoiceData & { customImageUrl: string })[] = [];
 
-    const readPromises = imageFiles.map((file, idx) => {
-      return new Promise<void>((resolve) => {
-        if (file.size > 3 * 1024 * 1024) {
-          resolve();
-          return;
+    const readPromises = imageFiles.map(async (file, idx) => {
+      const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const filePath = `invoices/${Date.now()}_${idx}_${cleanFileName}`;
+
+      let publicUrl = '';
+      try {
+        const { data, error } = await supabase.storage
+          .from('invoices')
+          .upload(filePath, file, { upsert: true });
+
+        if (!error && data) {
+          const { data: { publicUrl: extractedUrl } } = supabase.storage
+            .from('invoices')
+            .getPublicUrl(filePath);
+          if (extractedUrl) {
+            publicUrl = extractedUrl;
+          }
         }
+      } catch (storageErr) {
+        console.warn('Notice during Supabase Storage upload in handleCustomImagesUpload:', storageErr);
+      }
 
-        const reader = new FileReader();
-        reader.onload = () => {
-          const base64Url = reader.result as string;
-          const customId = `cust_${category}_${Date.now().toString().slice(-4)}_${idx}_${Math.floor(Math.random() * 1000)}`;
-          
-          let expected = '';
+      if (!publicUrl) {
+        publicUrl = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => resolve('');
+          reader.readAsDataURL(file);
+        });
+      }
 
-          if (category === 'tax_number') {
-            const tMatch = file.name.match(/T\d{13}/i);
-            if (tMatch) {
-              expected = tMatch[0].toUpperCase();
-            } else {
-              const digitMatch = file.name.match(/\d{13}/);
-              if (digitMatch) {
-                expected = `T${digitMatch[0]}`;
-              }
-            }
-            if (!expected) expected = customExpectedCode.trim().toUpperCase();
-            if (!expected) expected = generateRandomInvoiceNumber();
-          } else if (category === 'date_number') {
-            const dateMatch = file.name.match(/20\d{6}/) || file.name.match(/\d{8}/);
-            if (dateMatch) {
-              expected = dateMatch[0];
-            }
-            if (!expected) expected = customExpectedCode.trim().replace(/\D/g, '');
-            if (!expected || expected.length !== 8) expected = generateRandomDateNumber();
-          } else if (category === 'phone_number') {
-            const phoneMatch = file.name.match(/0\d{9,10}/) || file.name.match(/\d{10,11}/);
-            if (phoneMatch) {
-              expected = phoneMatch[0];
-            }
-            if (!expected) expected = customExpectedCode.trim().replace(/\D/g, '');
-            if (!expected || (expected.length !== 10 && expected.length !== 11)) expected = generateRandomPhoneNumber();
+      const customId = `cust_${category}_${Date.now().toString().slice(-4)}_${idx}_${Math.floor(Math.random() * 1000)}`;
+
+      let expected = '';
+      if (category === 'tax_number') {
+        const tMatch = file.name.match(/T\d{13}/i);
+        if (tMatch) {
+          expected = tMatch[0].toUpperCase();
+        } else {
+          const digitMatch = file.name.match(/\d{13}/);
+          if (digitMatch) {
+            expected = `T${digitMatch[0]}`;
           }
+        }
+        if (!expected) expected = customExpectedCode.trim().toUpperCase();
+        if (!expected) expected = generateRandomInvoiceNumber();
+      } else if (category === 'date_number') {
+        const dateMatch = file.name.match(/20\d{6}/) || file.name.match(/\d{8}/);
+        if (dateMatch) {
+          expected = dateMatch[0];
+        }
+        if (!expected) expected = customExpectedCode.trim().replace(/\D/g, '');
+        if (!expected || expected.length !== 8) expected = generateRandomDateNumber();
+      } else if (category === 'phone_number') {
+        const phoneMatch = file.name.match(/0\d{9,10}/) || file.name.match(/\d{10,11}/);
+        if (phoneMatch) {
+          expected = phoneMatch[0];
+        }
+        if (!expected) expected = customExpectedCode.trim().replace(/\D/g, '');
+        if (!expected || (expected.length !== 10 && expected.length !== 11)) expected = generateRandomPhoneNumber();
+      }
 
-          let company = customCompanyName.trim();
-          if (!company) {
-            const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
-            company = nameWithoutExt.substring(0, 24);
-          }
+      let company = customCompanyName.trim();
+      if (!company) {
+        const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
+        company = nameWithoutExt.substring(0, 24);
+      }
 
-          const newItem: GeneratedInvoiceData & { customImageUrl: string } = {
-            id: customId,
-            category,
-            expectedNumber: expected,
-            companyName: company || `Custom Upload ${idx + 1}`,
-            invoiceDate: new Date().toLocaleDateString('ja-JP'),
-            totalAmount: `${(2000 + Math.floor(Math.random() * 8000)).toLocaleString()}円`,
-            difficulty: 'medium',
-            style: 'modern',
-            customImageUrl: base64Url
-          };
+      const targetDigits = expected.replace(/\D/g, '').length || 13;
 
-          newItems.push(newItem);
-          resolve();
-        };
+      const newItem: GeneratedInvoiceData & { customImageUrl: string } = {
+        id: customId,
+        category,
+        expectedNumber: expected,
+        target_value: expected,
+        target_digits: targetDigits,
+        custom_digit_length: targetDigits,
+        companyName: company || `Custom Upload ${idx + 1}`,
+        invoiceDate: new Date().toLocaleDateString('ja-JP'),
+        totalAmount: `${(2000 + Math.floor(Math.random() * 8000)).toLocaleString()}円`,
+        difficulty: 'medium',
+        style: 'modern',
+        customImageUrl: publicUrl
+      };
 
-        reader.onerror = () => resolve();
-        reader.readAsDataURL(file);
-      });
+      newItems.push(newItem);
     });
 
     await Promise.all(readPromises);
@@ -1078,13 +1097,19 @@ export default function App() {
         const invoicePayloads = newItems.map(item => ({
           id: item.id,
           category: item.category,
+          image_url: item.customImageUrl,
+          custom_image_url: item.customImageUrl,
           expected_number: item.expectedNumber,
+          target_value: item.target_value || item.expectedNumber,
+          target_digit_length: (item.target_value || item.expectedNumber || '').replace(/\D/g, '').length || 13,
+          target_digits: item.target_digits || 13,
+          custom_digit_length: item.custom_digit_length || 13,
+          issuer_name: item.companyName,
           company_name: item.companyName,
           invoice_date: item.invoiceDate,
           total_amount: item.totalAmount,
           difficulty: item.difficulty,
-          style: item.style,
-          custom_image_url: item.customImageUrl
+          style: item.style
         }));
         await supabase.from('custom_invoices').upsert(invoicePayloads);
       } catch (err) {
