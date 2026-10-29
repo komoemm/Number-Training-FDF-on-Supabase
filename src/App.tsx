@@ -701,6 +701,9 @@ export default function App() {
             id: row.id,
             category: row.category,
             expectedNumber: row.expected_number,
+            target_value: row.target_value || row.expected_number,
+            target_digits: row.target_digits ? Number(row.target_digits) : (row.custom_digit_length ? Number(row.custom_digit_length) : undefined),
+            custom_digit_length: row.custom_digit_length ? Number(row.custom_digit_length) : (row.target_digits ? Number(row.target_digits) : undefined),
             companyName: row.company_name,
             invoiceDate: row.invoice_date,
             totalAmount: row.total_amount,
@@ -821,8 +824,19 @@ export default function App() {
       const catLower = String(item.category || 'tax_number').toLowerCase();
       const isDate = catLower === 'date_number' || catLower === 'date';
       const isTax = catLower === 'tax_number' || catLower === 'tax';
-      let expNum = item.expectedNumber;
-      if (isDate) {
+      let expNum = item.target_value || item.expectedNumber || '';
+      const customLength = item.custom_digit_length || item.target_digits;
+
+      if (customLength && customLength > 0) {
+        const rawDigits = (expNum || '').replace(/\D/g, '');
+        if (rawDigits.length >= customLength) {
+          expNum = rawDigits.slice(0, customLength);
+        } else if (rawDigits.length > 0) {
+          expNum = rawDigits.padEnd(customLength, '0');
+        } else {
+          expNum = ''.padStart(customLength, '0');
+        }
+      } else if (isDate) {
         const rawDigits = (expNum || '').replace(/\D/g, '');
         if (rawDigits.length >= 8) {
           expNum = rawDigits.slice(0, 8);
@@ -831,16 +845,21 @@ export default function App() {
         }
       } else if (isTax) {
         const rawDigits = (expNum || '').replace(/\D/g, '');
-        if (rawDigits.length === 10) {
+        if (rawDigits.length > 0) {
           expNum = rawDigits;
         } else {
           expNum = rawDigits.slice(-13).padStart(13, '0');
         }
       }
+
+      const cardDigits = customLength || (expNum ? expNum.replace(/\D/g, '').length : 13);
       deck100.push({
         ...item,
         expectedNumber: expNum,
         expectedValue: expNum,
+        target_value: expNum,
+        target_digits: cardDigits,
+        custom_digit_length: cardDigits,
         id: `card_${i + 1}_${item.id}_${Math.random().toString(36).substring(2, 6)}`
       });
     }
@@ -1130,11 +1149,21 @@ export default function App() {
   /**
    * Updates expected transcribed code for a custom invoice
    */
-  const updateCustomInvoiceCode = async (id: string, newCode: string) => {
+  const updateCustomInvoiceCode = async (id: string, newCode: string, targetDigits?: number) => {
     const formattedCode = newCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const calculatedDigits = targetDigits !== undefined && targetDigits > 0
+      ? targetDigits
+      : (formattedCode.replace(/\D/g, '').length || 13);
+
     const updated = customInvoices.map(inv => {
       if (inv.id === id) {
-        return { ...inv, expectedNumber: formattedCode };
+        return { 
+          ...inv, 
+          expectedNumber: formattedCode,
+          target_value: formattedCode,
+          target_digits: calculatedDigits,
+          custom_digit_length: calculatedDigits
+        };
       }
       return inv;
     });
@@ -1155,6 +1184,9 @@ export default function App() {
         await supabase.from('custom_invoices').upsert({
           id: matched.id,
           expected_number: matched.expectedNumber,
+          target_value: matched.target_value || matched.expectedNumber,
+          target_digits: matched.target_digits ?? calculatedDigits,
+          custom_digit_length: matched.custom_digit_length ?? calculatedDigits,
           company_name: matched.companyName,
           invoice_date: matched.invoiceDate || '',
           total_amount: matched.totalAmount || '',
@@ -1225,73 +1257,31 @@ export default function App() {
     const currentInvoice = expectedDataset[currentIndex];
     if (!currentInvoice) return;
     const currentCard = currentInvoice;
-    const expectedValue = (currentCard as any).expectedValue || currentCard.expectedNumber || '';
-    const rawCategory = currentCard.category || 'tax_number';
-    const catLower = String(rawCategory || '').toLowerCase();
-    const isDateCategory = catLower === 'date_number' || catLower === 'date';
-    const isTaxCategory = catLower === 'tax_number' || catLower === 'tax';
-    const isPhoneCategory = catLower === 'phone_number' || catLower === 'phone';
-
-    const sanitizedExpected = expectedValue.replace(/[^a-zA-Z0-9]/g, '');
-    const expDigitsOnly = expectedValue.replace(/\D/g, '');
-    const isTenDigitTax = isTaxCategory && expDigitsOnly.length === 10;
-
-    let cleaned = '';
-    let targetLength = 13;
-
-    if (isDateCategory) {
-      cleaned = rawVal.replace(/\D/g, '').slice(0, 8);
-      targetLength = 8;
-    } else if (isTenDigitTax) {
-      cleaned = rawVal.replace(/\D/g, '').slice(0, 10);
-      targetLength = 10;
-    } else if (isTaxCategory) {
-      const inputUpper = rawVal.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-      const expHasT = sanitizedExpected.toUpperCase().startsWith('T');
-      const inputHasT = inputUpper.startsWith('T');
-      if (expHasT && inputHasT) {
-        cleaned = inputUpper.slice(0, 14);
-        targetLength = 14;
-      } else {
-        cleaned = rawVal.replace(/\D/g, '').slice(0, 13);
-        targetLength = 13;
-      }
-    } else if (isPhoneCategory) {
-      cleaned = rawVal.replace(/\D/g, '');
-      targetLength = expDigitsOnly.length || 10;
-      cleaned = cleaned.slice(0, targetLength);
-    } else {
-      cleaned = rawVal.replace(/[^a-zA-Z0-9]/g, '');
-      targetLength = sanitizedExpected.length || 10;
-      cleaned = cleaned.slice(0, targetLength);
+    if (!currentCard.target_value) {
+      currentCard.target_value = (currentCard as any).expectedValue || currentCard.expectedNumber || '';
     }
 
+    // Dynamic Target Length Detection as specified
+    const requiredDigits = currentCard.target_value 
+      ? currentCard.target_value.replace(/\D/g, '').length 
+      : (currentCard.custom_digit_length || (currentCard as any).target_digits || 13);
+
+    // Filter to digits and clamp to dynamic requiredDigits
+    const cleaned = rawVal.replace(/\D/g, '').slice(0, requiredDigits);
     setTypedValue(cleaned);
+
+    const expDigitsOnly = currentCard.target_value.replace(/\D/g, '');
 
     // Real-time character match feedback
     if (cleaned.length > 0) {
-      if (isDateCategory) {
-        setLastCharacterValid(expDigitsOnly.startsWith(cleaned));
-      } else if (isTenDigitTax) {
-        setLastCharacterValid(expDigitsOnly.startsWith(cleaned));
-      } else if (isTaxCategory) {
-        const expectedUpper = sanitizedExpected.toUpperCase();
-        if (expectedUpper.startsWith('T') && !cleaned.startsWith('T')) {
-          const withoutT = expectedUpper.substring(1);
-          setLastCharacterValid(withoutT.startsWith(cleaned));
-        } else {
-          setLastCharacterValid(expectedUpper.startsWith(cleaned));
-        }
-      } else {
-        setLastCharacterValid(expDigitsOnly.startsWith(cleaned));
-      }
+      setLastCharacterValid(expDigitsOnly.startsWith(cleaned));
     } else {
       setLastCharacterValid(null);
     }
 
-    // Auto-advance trigger
-    if (cleaned.length >= targetLength && targetLength > 0) {
-      verifyAndAdvanceSession(cleaned, rawCategory);
+    // Trigger auto-submit / card completion automatically when input.length === requiredDigits
+    if (cleaned.length === requiredDigits && requiredDigits > 0) {
+      verifyAndAdvanceSession(cleaned, currentCard.category || 'tax_number');
     }
   };
 
@@ -1323,34 +1313,14 @@ export default function App() {
     const durationMs = Math.round(endTimestamp - startTimeRef.current);
     const currentInvoice = expectedDataset[currentIndex];
     const currentCard = currentInvoice;
-    const expectedValue = (currentCard as any).expectedValue || currentCard.expectedNumber || '';
-    const catLower = String(category || currentCard.category || 'tax_number').toLowerCase();
-    const isDateCategory = catLower === 'date_number' || catLower === 'date';
-    const isTaxCategory = catLower === 'tax_number' || catLower === 'tax';
-    const isPhoneCategory = catLower === 'phone_number' || catLower === 'phone';
-
-    // Sanitize values for comparison
-    const sanitizedExpected = expectedValue.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const sanitizedTyped = typedText.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const expDigits = sanitizedExpected.replace(/\D/g, '');
-    const typDigits = sanitizedTyped.replace(/\D/g, '');
-
-    let isCorrect = false;
-    if (isTaxCategory) {
-      if (expDigits.length === 10) {
-        // 10-digit registration / tax number
-        isCorrect = (expDigits === typDigits);
-      } else {
-        // T + 13 digits (or 13 digits without T)
-        isCorrect = (sanitizedExpected === sanitizedTyped) || 
-          (sanitizedExpected.endsWith(sanitizedTyped) && sanitizedTyped.length === 13) ||
-          (expDigits === typDigits && expDigits.length === 13);
-      }
-    } else if (isDateCategory || isPhoneCategory) {
-      isCorrect = (expDigits === typDigits);
-    } else {
-      isCorrect = (sanitizedExpected === sanitizedTyped);
+    if (!currentCard.target_value) {
+      currentCard.target_value = (currentCard as any).expectedValue || currentCard.expectedNumber || '';
     }
+
+    // Sanitize values for dynamic digit comparison
+    const expDigits = currentCard.target_value.replace(/\D/g, '');
+    const typDigits = typedText.replace(/\D/g, '');
+    const isCorrect = (expDigits === typDigits);
 
     const resultEntry: TypingDetail = {
       imageId: currentInvoice.id,
@@ -2148,46 +2118,14 @@ export default function App() {
         {isTestActive && expectedDataset[currentIndex] && (() => {
           const currentInvoice = expectedDataset[currentIndex];
           const currentCard = currentInvoice;
-          if (!(currentCard as any).expectedValue) {
-            (currentCard as any).expectedValue = currentInvoice.expectedNumber;
-          }
-          const expectedValue = (currentCard as any).expectedValue || currentCard.expectedNumber || '';
-          const rawCleanExpected = expectedValue.replace(/[^0-9a-zA-Z]/g, '');
-          const expDigitsOnly = expectedValue.replace(/\D/g, '');
-
-          const cardCategory = currentInvoice.category || 'tax_number';
-          const catLower = String(cardCategory).toLowerCase();
-          const isDate = catLower === 'date_number' || catLower === 'date';
-          const isTax = catLower === 'tax_number' || catLower === 'tax';
-          const isPhone = catLower === 'phone_number' || catLower === 'phone';
-
-          const isTenDigitTax = isTax && expDigitsOnly.length === 10;
-
-          // Dynamic required target length
-          let targetLength = 13;
-          if (isDate) {
-            targetLength = 8;
-          } else if (isTenDigitTax) {
-            targetLength = 10;
-          } else if (isTax) {
-            const hasT = rawCleanExpected.toUpperCase().startsWith('T');
-            const typedHasT = typedValue.toUpperCase().startsWith('T');
-            targetLength = (hasT && typedHasT) ? 14 : 13;
-          } else if (isPhone) {
-            targetLength = expDigitsOnly.length || 10;
-          } else {
-            targetLength = rawCleanExpected.length || 10;
+          if (!currentCard.target_value) {
+            currentCard.target_value = (currentCard as any).expectedValue || currentCard.expectedNumber || '';
           }
 
-          // Indicator dots count dynamically bound to currentCard.expectedValue.replace(/[^0-9a-zA-Z]/g, '').length
-          const rawExpectedCount = expectedValue.replace(/[^0-9a-zA-Z]/g, '').length;
-          const dotsCount = isDate 
-            ? 8 
-            : isTenDigitTax
-            ? 10
-            : (isTax && !typedValue.toUpperCase().startsWith('T') && rawCleanExpected.toUpperCase().startsWith('T'))
-            ? 13
-            : (rawExpectedCount > 0 ? rawExpectedCount : targetLength);
+          // Dynamic Target Length Detection as specified:
+          const requiredDigits = currentCard.target_value 
+            ? currentCard.target_value.replace(/\D/g, '').length 
+            : (currentCard.custom_digit_length || (currentCard as any).target_digits || 13);
 
           return (
             <div className="space-y-6 animate-fade-in" id="active-test-container">
@@ -2233,14 +2171,8 @@ export default function App() {
                           <span className="text-sm font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-1 rounded-xl font-mono shadow-2xs">
                             Card {currentIndex + 1} / {expectedDataset.length}
                           </span>
-                          <span className="text-[10px] font-extrabold px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 uppercase tracking-wider">
-                            {isDate 
-                              ? '📅 Date (YYYYMMDD)' 
-                              : isPhone 
-                              ? '📞 Phone Digits' 
-                              : isTenDigitTax
-                              ? '🧾 REGISTRATION / TAX NO (10 DIGITS)'
-                              : '🧾 Tax No (T+13)'}
+                          <span className="text-[10px] font-extrabold px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 uppercase tracking-wider font-mono">
+                            🧾 TARGET NUMBER ({requiredDigits} DIGITS)
                           </span>
                         </div>
 
@@ -2303,14 +2235,8 @@ export default function App() {
 
                     {/* Typing form input container */}
                     <div className="space-y-3 relative">
-                      <label htmlFor="numeric-speed-input" className="block text-xs font-bold text-slate-700 uppercase tracking-widest">
-                        {isDate 
-                          ? '8-Digit Date (YYYYMMDD)' 
-                          : isPhone 
-                          ? 'Phone Digits (Numbers only)' 
-                          : isTenDigitTax
-                          ? 'REGISTRATION / TAX NO (10 DIGITS)'
-                          : 'Tax Number (T + 13 Digits)'}
+                      <label htmlFor="numeric-speed-input" id="numeric-speed-input-label" className="block text-xs font-bold text-slate-700 uppercase tracking-widest">
+                        {`TARGET NUMBER (${requiredDigits} DIGITS)`}
                       </label>
 
                       {/* Alphanumeric / Numeric Text Field */}
@@ -2319,6 +2245,13 @@ export default function App() {
                           id="numeric-speed-input"
                           ref={inputRef}
                           type="text"
+                          inputMode="numeric"
+                          role="progressbar"
+                          aria-labelledby="numeric-speed-input-label"
+                          aria-label={`Target Number Input ${typedValue.length} of ${requiredDigits} digits`}
+                          aria-valuenow={typedValue.length}
+                          aria-valuemin={0}
+                          aria-valuemax={requiredDigits}
                           value={typedValue}
                           onChange={handleInputChange}
                           onKeyDown={handleInputKeyDown}
@@ -2327,29 +2260,24 @@ export default function App() {
                           autoComplete="off"
                           autoCapitalize="characters"
                           spellCheck={false}
-                          placeholder={
-                            isDate ? 'YYYYMMDD (e.g. 20260406)' :
-                            isPhone ? '03... / 090...' :
-                            isTenDigitTax ? '10 digits (e.g. 0886324959)' :
-                            'T... or 13 digits'
-                          }
+                          placeholder={`Enter ${requiredDigits} digits`}
                           className={`w-full py-4 px-5 text-center text-3xl font-bold tracking-[0.2em] font-mono text-slate-800 placeholder:text-slate-300 bg-slate-50 border focus:ring-4 outline-none rounded-xl transition ${
                             lastCharacterValid === true ? 'border-emerald-500 focus:ring-emerald-50 bg-emerald-50/10 text-emerald-800' : 
                             lastCharacterValid === false ? 'border-rose-500 focus:ring-rose-50 bg-rose-50/10 text-rose-800' : 'border-slate-250 focus:ring-indigo-100'
                           }`}
                         />
 
-                        {/* Character count ticks */}
+                        {/* Character count ticks (Dynamic Progress Indicator) */}
                         <div className="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 flex items-center justify-center">
-                          <span className="text-[11px] font-bold font-mono text-slate-400 bg-white border border-slate-205 px-1.5 py-0.5 rounded tracking-wide">
-                            {typedValue.length} / {targetLength}
+                          <span className="text-[11px] font-bold font-mono text-slate-400 bg-white border border-slate-205 px-1.5 py-0.5 rounded tracking-wide shadow-2xs" id="input-progress-indicator">
+                            {typedValue.length} / {requiredDigits}
                           </span>
                         </div>
                       </div>
 
-                      {/* Visual tick ribbon */}
-                      <div className="flex justify-center space-x-1 h-1.5 flex-wrap gap-y-1">
-                        {Array.from({ length: dotsCount }).map((_, idx) => {
+                      {/* Visual tick ribbon (Dynamic Dots) */}
+                      <div className="flex justify-center space-x-1 h-1.5 flex-wrap gap-y-1" aria-hidden="true">
+                        {Array.from({ length: requiredDigits }).map((_, idx) => {
                           let dotColor = 'bg-slate-100 border border-slate-200';
                           if (idx < typedValue.length) {
                             if (lastCharacterValid === false && idx === typedValue.length - 1) {
@@ -2374,15 +2302,8 @@ export default function App() {
                         Quick Entry Rules:
                       </span>
                       <ul className="space-y-1 text-[11px] leading-relaxed list-disc list-inside">
-                        {isDate ? (
-                          <li>Enter 8 digits as <strong className="text-slate-800 font-mono">YYYYMMDD</strong> (auto-advances upon 8th digit).</li>
-                        ) : isPhone ? (
-                          <li>Enter telephone digits only (strictly retains leading 0).</li>
-                        ) : isTenDigitTax ? (
-                          <li>Enter 10 digits as <strong className="text-slate-800 font-mono">REGISTRATION / TAX NO (10 DIGITS)</strong>.</li>
-                        ) : (
-                          <li>Type <strong className="text-slate-800 font-mono">T + 13 digits</strong> or enter just the 13 numbers.</li>
-                        )}
+                        <li>Enter <strong className="text-slate-800 font-mono">{requiredDigits} digits</strong> matching the card target value.</li>
+                        <li>Auto-advances immediately upon entering all {requiredDigits} digits.</li>
                         <li>Press <strong className="text-slate-700 font-bold">Enter</strong> anytime to submit immediately.</li>
                         <li>Click outside? Click <button onClick={() => inputRef.current?.focus()} className="text-indigo-600 hover:text-indigo-500 underline cursor-pointer font-bold">Refocus Input</button>.</li>
                       </ul>
@@ -2847,23 +2768,54 @@ export default function App() {
                         )}
                       </div>
 
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
-                        Expected Transcribed Value <span className="text-rose-500">*</span>
-                      </label>
-                      <div className="relative flex items-center">
-                        <input
-                          type="text"
-                          placeholder={modalCategory === 'date_number' ? '20260522' : modalCategory === 'phone_number' ? '0312345678' : 'T1234567890123'}
-                          value={inv.expectedNumber}
-                          autoFocus
-                          onChange={(e) => updateCustomInvoiceCode(inv.id, e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              handleNextLabel();
-                            }
-                          }}
-                          className="w-full p-2.5 bg-slate-50 border border-slate-205 text-sm text-slate-800 font-mono font-bold rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-100 tracking-wide text-indigo-700"
-                        />
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-start">
+                        <div className="sm:col-span-8">
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 truncate">
+                            Expected Transcribed Value <span className="text-rose-500">*</span>
+                          </label>
+                          <div className="relative flex items-center">
+                            <input
+                              type="text"
+                              placeholder={modalCategory === 'date_number' ? '20260522' : modalCategory === 'phone_number' ? '0312345678' : 'e.g. 2026720 or 1234567890123'}
+                              value={inv.expectedNumber}
+                              autoFocus
+                              onChange={(e) => {
+                                const newCode = e.target.value;
+                                const digits = newCode.replace(/\D/g, '').length;
+                                updateCustomInvoiceCode(inv.id, newCode, digits > 0 ? digits : undefined);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  handleNextLabel();
+                                }
+                              }}
+                              className="w-full p-2.5 bg-slate-50 border border-slate-205 text-sm text-slate-800 font-mono font-bold rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-100 tracking-wide text-indigo-700"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="sm:col-span-4">
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 truncate">
+                            Target Digits
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={30}
+                            placeholder="Length"
+                            value={inv.target_digits || inv.custom_digit_length || (inv.expectedNumber ? inv.expectedNumber.replace(/\D/g, '').length : '')}
+                            onChange={(e) => {
+                              const val = e.target.value === '' ? undefined : parseInt(e.target.value, 10);
+                              updateCustomInvoiceCode(inv.id, inv.expectedNumber, val);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                handleNextLabel();
+                              }
+                            }}
+                            className="w-full p-2.5 bg-slate-50 border border-slate-205 text-sm text-slate-800 font-mono font-bold rounded-xl outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-100 text-center"
+                          />
+                        </div>
                       </div>
                       <p className="text-[10px] text-slate-400 mt-1 leading-normal font-sans">
                         Press <strong className="text-slate-700 font-bold">Enter</strong> to save and go to next image automatically.

@@ -27,7 +27,10 @@ import {
   Save,
   Check,
   Archive,
-  FileArchive
+  FileArchive,
+  Lock,
+  Unlock,
+  Hash
 } from 'lucide-react';
 import { GeneratedInvoiceData, TrainingCategory, TrainingMode } from '../types';
 import { supabase } from '../supabase';
@@ -40,6 +43,9 @@ export interface PoolItem extends GeneratedInvoiceData {
   isSynced?: boolean;
   matchedFromCsv?: boolean;
   matchedIdentifier?: string;
+  target_value?: string;
+  target_digits?: number;
+  custom_digit_length?: number;
 }
 
 interface CategorySandboxProps {
@@ -48,7 +54,7 @@ interface CategorySandboxProps {
   onUploadImages: (files: FileList | File[], category: TrainingCategory) => Promise<void>;
   onAddSample?: (category: TrainingCategory) => void;
   onDeleteInvoice: (id: string) => void;
-  onUpdateCode: (id: string, newCode: string) => void;
+  onUpdateCode: (id: string, newCode: string, targetDigits?: number) => void;
   onUpdateCompany: (id: string, newCompany: string) => void;
   onClearPool: (category: TrainingCategory) => void;
   onOpenLabelingModal: (indexInAll: number) => void;
@@ -89,21 +95,24 @@ export const normalizeKey = (val: string): string => {
 // - tax_number: converts full-width numbers, preserves 10-digit registration numbers or strips leading "T"/"t" for 13 digits
 // - phone_number: converts full-width numbers, strictly preserves leading zeros as text
 // - date_number: converts full-width numbers, normalizes strictly to 8 digits YYYYMMDD
-export const cleanEnteredTarget = (raw: string, cat: TrainingCategory): string => {
+export const cleanEnteredTarget = (raw: string, cat: TrainingCategory, targetDigits?: number): string => {
   const val = String(raw || '').trim();
   const catLower = String(cat || '').toLowerCase();
   if (catLower === 'tax_number' || catLower === 'tax') {
     let tax = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
     const rawDigits = tax.replace(/\D/g, '');
+    if (targetDigits && targetDigits > 0) {
+      return rawDigits.slice(0, targetDigits);
+    }
     if (rawDigits.length === 10) {
       return rawDigits;
     }
     tax = tax.replace(/^T/i, '');
     tax = tax.replace(/\D/g, '');
-    if (tax.length >= 13) {
+    if (tax.length > 13) {
       return tax.slice(-13);
     }
-    return tax.slice(0, 13);
+    return tax;
   }
   if (catLower === 'date_number' || catLower === 'date') {
     let dateStr = val.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
@@ -193,6 +202,8 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
   // Modal temporary edit state
   const [modalTarget, setModalTarget] = useState<string>('');
   const [modalIssuer, setModalIssuer] = useState<string>('');
+  const [modalTargetDigits, setModalTargetDigits] = useState<number | ''>('');
+  const [isDigitsLocked, setIsDigitsLocked] = useState<boolean>(false);
   const [isSavingCode, setIsSavingCode] = useState<boolean>(false);
 
   // Toast & Feedback State
@@ -248,10 +259,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
     const initialMappedItems: PoolItem[] = sourceInvoices.map((inv) => {
       const title = getItemTitle(inv);
       const normKey = normalizeKey(title);
-      const cached = localCache[normKey];
+      const cached = localCache[normKey] as any;
+      const targetDigits = cached?.target_digits || cached?.custom_digit_length || inv.target_digits || inv.custom_digit_length;
       const targetVal = cached?.expected_value
-        ? cleanEnteredTarget(cached.expected_value, category)
-        : cleanEnteredTarget(inv.expectedNumber || '', category);
+        ? cleanEnteredTarget(cached.expected_value, category, targetDigits)
+        : cleanEnteredTarget(inv.expectedNumber || '', category, targetDigits);
       const issuerVal = (cached?.issuer_or_note !== undefined ? cached.issuer_or_note : inv.companyName) || '';
 
       return {
@@ -259,6 +271,9 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         title,
         target: targetVal,
         expectedNumber: targetVal,
+        target_value: targetVal,
+        target_digits: targetDigits,
+        custom_digit_length: targetDigits,
         issuer: issuerVal,
         companyName: issuerVal || inv.companyName,
         isSynced: !!cached
@@ -275,19 +290,26 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         .eq('category', category);
 
       if (!error && Array.isArray(dbLabels)) {
-        const lookupMap = new Map<string, { expected_value: string; issuer_or_note?: string }>();
-        const newCache: Record<string, { expected_value: string; issuer_or_note?: string }> = { ...localCache };
+        const lookupMap = new Map<string, { expected_value: string; target_value?: string; target_digits?: number; custom_digit_length?: number; issuer_or_note?: string }>();
+        const newCache: Record<string, any> = { ...localCache };
 
         dbLabels.forEach((row: any) => {
           if (row.image_identifier) {
             const key = normalizeKey(row.image_identifier);
-            const cleanVal = cleanEnteredTarget(row.expected_value || '', category);
+            const digits = row.target_digits ? Number(row.target_digits) : (row.custom_digit_length ? Number(row.custom_digit_length) : undefined);
+            const cleanVal = cleanEnteredTarget(row.expected_value || '', category, digits);
             lookupMap.set(key, {
               expected_value: cleanVal,
+              target_value: row.target_value || cleanVal,
+              target_digits: digits,
+              custom_digit_length: digits,
               issuer_or_note: row.issuer_or_note || ''
             });
             newCache[key] = {
               expected_value: cleanVal,
+              target_value: row.target_value || cleanVal,
+              target_digits: digits,
+              custom_digit_length: digits,
               issuer_or_note: row.issuer_or_note || ''
             };
           }
@@ -308,9 +330,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
               const record = lookupMap.get(itemKey)!;
               const cleanVal = record.expected_value;
               const issuerVal = record.issuer_or_note || item.issuer;
+              const digits = record.target_digits ?? record.custom_digit_length;
 
-              if (cleanVal !== item.expectedNumber) {
-                onUpdateCode(item.id, cleanVal);
+              if (cleanVal !== item.expectedNumber || digits !== item.target_digits) {
+                onUpdateCode(item.id, cleanVal, digits);
               }
               if (record.issuer_or_note && record.issuer_or_note !== item.companyName && onUpdateCompany) {
                 onUpdateCompany(item.id, record.issuer_or_note);
@@ -320,6 +343,9 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                 ...item,
                 target: cleanVal,
                 expectedNumber: cleanVal,
+                target_value: cleanVal,
+                target_digits: digits,
+                custom_digit_length: digits,
                 issuer: issuerVal,
                 companyName: issuerVal || item.companyName,
                 isSynced: true
@@ -341,14 +367,15 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
   /**
    * Persistent Storage Integration on Save (handleSaveVerifyCode):
-   * - Clean the entered target.
-   * - Update active state 'poolItems'.
+   * - Clean the entered target according to dynamic digit length.
+   * - Update active state 'poolItems' with target_digits and custom_digit_length.
    * - Immediately persist to Supabase 'training_labels' with onConflict.
    * - Update LocalStorage mirror (`training_labels_cache_${category}`).
    */
   const handleSaveVerifyCode = async (
     targetInput: string,
     issuerInput: string,
+    targetDigitsInput?: number | '',
     itemToSave?: PoolItem
   ) => {
     const reviewingItem = itemToSave || (reviewerModalIndex !== null ? sortedPoolItems[reviewerModalIndex] : null);
@@ -356,7 +383,11 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
     setIsSavingCode(true);
 
-    const cleanTarget = cleanEnteredTarget(targetInput, category);
+    const digitsVal = typeof targetDigitsInput === 'number' && targetDigitsInput > 0
+      ? targetDigitsInput
+      : (modalTargetDigits !== '' ? Number(modalTargetDigits) : (targetInput.replace(/\D/g, '').length || 13));
+
+    const cleanTarget = cleanEnteredTarget(targetInput, category, digitsVal);
     const issuerNote = (issuerInput || '').trim();
     const itemTitle = reviewingItem.title || getItemTitle(reviewingItem);
     const normalizedKey = normalizeKey(itemTitle);
@@ -369,6 +400,9 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
             ...item,
             target: cleanTarget,
             expectedNumber: cleanTarget,
+            target_value: cleanTarget,
+            target_digits: digitsVal,
+            custom_digit_length: digitsVal,
             issuer: issuerNote,
             companyName: issuerNote || item.companyName,
             isSynced: true
@@ -379,7 +413,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
     );
 
     // Propagate to parent state
-    onUpdateCode(reviewingItem.id, cleanTarget);
+    onUpdateCode(reviewingItem.id, cleanTarget, digitsVal);
     if (onUpdateCompany) {
       onUpdateCompany(reviewingItem.id, issuerNote);
     }
@@ -388,9 +422,12 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
     const cacheKey = `training_labels_cache_${category}`;
     try {
       const rawCache = localStorage.getItem(cacheKey);
-      const cacheMap: Record<string, { expected_value: string; issuer_or_note?: string }> = rawCache ? JSON.parse(rawCache) : {};
+      const cacheMap: Record<string, any> = rawCache ? JSON.parse(rawCache) : {};
       cacheMap[normalizedKey] = {
         expected_value: cleanTarget,
+        target_value: cleanTarget,
+        target_digits: digitsVal,
+        custom_digit_length: digitsVal,
         issuer_or_note: issuerNote
       };
       localStorage.setItem(cacheKey, JSON.stringify(cacheMap));
@@ -398,12 +435,15 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
       console.warn('Failed to update local cache mirror:', e);
     }
 
-    // Immediately persist to Supabase
+    // Immediately persist to Supabase card data schema
     try {
       const { error } = await supabase.from('training_labels').upsert({
         category: category,
         image_identifier: normalizeKey(reviewingItem.title),
         expected_value: cleanTarget,
+        target_value: cleanTarget,
+        target_digits: digitsVal,
+        custom_digit_length: digitsVal,
         issuer_or_note: issuerNote.trim()
       }, { onConflict: 'category,image_identifier' });
 
@@ -411,20 +451,20 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         console.warn('Supabase upsert warning:', error);
         setToastFeedback({
           type: 'warning',
-          message: 'ကွန်ရက်မရရှိပါသဖြင့် အချက်အလက်ကို သင့်စက်တွင်း (Local Cache) ၌သာ သိမ်းဆည်းထားပါသည်။'
+          message: 'Saved locally, but cloud synchronization encountered an issue.'
         });
       } else {
         setLastSavedId(reviewingItem.id);
         setToastFeedback({
           type: 'success',
-          message: 'သတ်မှတ်တန်ဖိုးကို Database တွင် အောင်မြင်စွာ သိမ်းဆည်းပြီးပါပြီ။'
+          message: 'Saved verified target value and digit length to database.'
         });
       }
     } catch (err) {
       console.warn('Network offline or error during Supabase upsert:', err);
       setToastFeedback({
         type: 'warning',
-        message: 'ကွန်ရက်မရရှိပါသဖြင့် အချက်အလက်ကို သင့်စက်တွင်း (Local Cache) ၌သာ သိမ်းဆည်းထားပါသည်။'
+        message: 'Saved locally, but cloud synchronization encountered an issue.'
       });
     } finally {
       setIsSavingCode(false);
@@ -444,6 +484,16 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         : (activeReviewItem.target || activeReviewItem.expectedNumber || '');
       setModalTarget(initialTarget);
       setModalIssuer(activeReviewItem.issuer || activeReviewItem.companyName || '');
+
+      const existingDigits = activeReviewItem.target_digits || activeReviewItem.custom_digit_length;
+      if (existingDigits && existingDigits > 0) {
+        setModalTargetDigits(existingDigits);
+        setIsDigitsLocked(true);
+      } else {
+        const rawDigitsCount = initialTarget.replace(/\D/g, '').length;
+        setModalTargetDigits(rawDigitsCount > 0 ? rawDigitsCount : '');
+        setIsDigitsLocked(false);
+      }
     }
   }, [activeReviewItemId, category]);
 
@@ -1643,9 +1693,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         const isItemSynced = currentInv.isSynced || lastSavedId === currentInv.id;
 
         const handleNextReview = async () => {
-          const cleanTarget = cleanEnteredTarget(modalTarget, category);
-          if (cleanTarget !== currentInv.target || modalIssuer.trim() !== currentInv.issuer) {
-            await handleSaveVerifyCode(modalTarget, modalIssuer, currentInv);
+          const digitsVal = modalTargetDigits !== '' ? Number(modalTargetDigits) : (modalTarget.replace(/\D/g, '').length || 13);
+          const cleanTarget = cleanEnteredTarget(modalTarget, category, digitsVal);
+          if (cleanTarget !== currentInv.target || modalIssuer.trim() !== currentInv.issuer || digitsVal !== currentInv.target_digits) {
+            await handleSaveVerifyCode(modalTarget, modalIssuer, digitsVal, currentInv);
           }
           if (reviewerModalIndex < sortedPoolItems.length - 1) {
             setReviewerModalIndex(reviewerModalIndex + 1);
@@ -1655,9 +1706,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
         };
 
         const handlePrevReview = async () => {
-          const cleanTarget = cleanEnteredTarget(modalTarget, category);
-          if (cleanTarget !== currentInv.target || modalIssuer.trim() !== currentInv.issuer) {
-            await handleSaveVerifyCode(modalTarget, modalIssuer, currentInv);
+          const digitsVal = modalTargetDigits !== '' ? Number(modalTargetDigits) : (modalTarget.replace(/\D/g, '').length || 13);
+          const cleanTarget = cleanEnteredTarget(modalTarget, category, digitsVal);
+          if (cleanTarget !== currentInv.target || modalIssuer.trim() !== currentInv.issuer || digitsVal !== currentInv.target_digits) {
+            await handleSaveVerifyCode(modalTarget, modalIssuer, digitsVal, currentInv);
           }
           if (reviewerModalIndex > 0) {
             setReviewerModalIndex(reviewerModalIndex - 1);
@@ -1759,61 +1811,151 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
 
                   {/* Input Fields */}
                   <div className="space-y-3">
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label 
-                          htmlFor="modal-expected-target"
-                          id="modal-expected-target-label"
-                          className="block text-[10px] font-bold text-slate-600 uppercase tracking-widest"
-                        >
-                          {category === 'date_number'
-                            ? 'Expected Date (YYYYMMDD - 8 Digits)'
-                            : category === 'phone_number'
-                            ? 'Expected Phone Digits'
-                            : (modalTarget.replace(/\D/g, '').length === 10 || (currentInv.target && currentInv.target.replace(/\D/g, '').length === 10))
-                            ? 'REGISTRATION / TAX NO (10 DIGITS)'
-                            : 'Expected Tax Number (13 Digits / T+13)'} <span className="text-rose-500">*</span>
-                        </label>
-                        {isItemSynced && (
-                          <span className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
-                            <Check className="w-2.5 h-2.5" aria-hidden="true" /> Persisted
-                          </span>
-                        )}
-                      </div>
-                      <input
-                        id="modal-expected-target"
-                        name="modalExpectedTarget"
-                        aria-labelledby="modal-expected-target-label"
-                        type="text"
-                        inputMode={category === 'phone_number' ? 'tel' : 'numeric'}
-                        autoComplete="off"
-                        placeholder={
-                          category === 'date_number' ? '20260406' :
-                          category === 'phone_number' ? '0312345678' :
-                          (modalTarget.replace(/\D/g, '').length === 10 || (currentInv.target && currentInv.target.replace(/\D/g, '').length === 10)) ? '0886324959' :
-                          '1234567890123'
-                        }
-                        value={modalTarget}
-                        autoFocus
-                        onChange={(e) => {
-                          const val = category === 'tax_number' ? e.target.value.replace(/^T/i, '') : e.target.value;
-                          setModalTarget(val);
-                        }}
-                        onKeyDown={async (e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            await handleSaveVerifyCode(modalTarget, modalIssuer, currentInv);
-                            handleNextReview();
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-start">
+                      {/* Expected Number (8 columns) */}
+                      <div className="sm:col-span-8">
+                        <div className="flex items-center justify-between mb-1">
+                          <label 
+                            htmlFor="modal-expected-target"
+                            id="modal-expected-target-label"
+                            className="block text-[10px] font-bold text-slate-600 uppercase tracking-widest truncate"
+                          >
+                            Expected Number <span className="text-rose-500">*</span>
+                          </label>
+                          {isItemSynced && (
+                            <span className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
+                              <Check className="w-2.5 h-2.5" aria-hidden="true" /> Persisted
+                            </span>
+                          )}
+                        </div>
+                        <input
+                          id="modal-expected-target"
+                          name="modalExpectedTarget"
+                          aria-labelledby="modal-expected-target-label"
+                          type="text"
+                          inputMode={category === 'phone_number' ? 'tel' : 'numeric'}
+                          autoComplete="off"
+                          placeholder={
+                            category === 'date_number' ? '20260406' :
+                            category === 'phone_number' ? '0312345678' :
+                            'e.g. 2026720 or 1234567890123'
                           }
-                        }}
-                        className="w-full p-2.5 bg-slate-50 border border-slate-300 text-sm text-slate-900 font-mono font-bold rounded-xl outline-hidden focus:bg-white focus:border-indigo-500 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 tracking-wide text-indigo-700 uppercase"
-                      />
-                      <p className="text-[10px] text-slate-400 mt-1">
-                        {category === 'tax_number' 
-                          ? ((modalTarget.replace(/\D/g, '').length === 10 || (currentInv.target && currentInv.target.replace(/\D/g, '').length === 10)) ? 'Registration / Tax No (10 digits). ' : "Enter 13 numeric digits (without 'T'). ") 
-                          : category === 'date_number' ? 'Enter 8 digits as YYYYMMDD. ' : ''}Press <strong className="text-slate-700 font-bold">Enter</strong> to save and proceed to next image.
-                      </p>
+                          value={modalTarget}
+                          autoFocus
+                          onChange={(e) => {
+                            const val = category === 'tax_number' ? e.target.value.replace(/^T/i, '') : e.target.value;
+                            setModalTarget(val);
+                            // By default, auto-populate this length based on the characters typed in the expected number box
+                            if (!isDigitsLocked) {
+                              const digitsCount = val.replace(/\D/g, '').length;
+                              setModalTargetDigits(digitsCount > 0 ? digitsCount : '');
+                            }
+                          }}
+                          onKeyDown={async (e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              await handleSaveVerifyCode(modalTarget, modalIssuer, modalTargetDigits, currentInv);
+                              handleNextReview();
+                            }
+                          }}
+                          className="w-full p-2.5 bg-slate-50 border border-slate-300 text-sm text-slate-900 font-mono font-bold rounded-xl outline-hidden focus:bg-white focus:border-indigo-500 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 tracking-wide text-indigo-700 uppercase"
+                        />
+                      </div>
+
+                      {/* Target Digits (Length) (4 columns) */}
+                      <div className="sm:col-span-4">
+                        <div className="flex items-center justify-between mb-1">
+                          <label 
+                            htmlFor="modal-target-digits"
+                            id="modal-target-digits-label"
+                            className="block text-[10px] font-bold text-slate-600 uppercase tracking-widest truncate"
+                            title="Target Digits (Length)"
+                          >
+                            Target Digits
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isDigitsLocked) {
+                                setIsDigitsLocked(false);
+                                const digitsCount = modalTarget.replace(/\D/g, '').length;
+                                setModalTargetDigits(digitsCount > 0 ? digitsCount : '');
+                              } else {
+                                setIsDigitsLocked(true);
+                              }
+                            }}
+                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded cursor-pointer transition flex items-center gap-0.5 ${
+                              isDigitsLocked 
+                                ? 'bg-amber-100 text-amber-800 border border-amber-300' 
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200'
+                            }`}
+                            title={isDigitsLocked ? 'Digit length is locked (click to unlock auto-calc)' : 'Auto-calculated (click to lock)'}
+                          >
+                            {isDigitsLocked ? <><Lock className="w-2.5 h-2.5" /> Locked</> : <><Unlock className="w-2.5 h-2.5" /> Auto</>}
+                          </button>
+                        </div>
+                        <input
+                          id="modal-target-digits"
+                          name="modalTargetDigits"
+                          aria-labelledby="modal-target-digits-label"
+                          type="number"
+                          min={1}
+                          max={30}
+                          placeholder="Length"
+                          value={modalTargetDigits}
+                          onChange={(e) => {
+                            const val = e.target.value === '' ? '' : parseInt(e.target.value, 10);
+                            setModalTargetDigits(val);
+                            setIsDigitsLocked(true); // Allow admin to manually override or lock the digit length
+                          }}
+                          onKeyDown={async (e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              await handleSaveVerifyCode(modalTarget, modalIssuer, modalTargetDigits, currentInv);
+                              handleNextReview();
+                            }
+                          }}
+                          className="w-full p-2.5 bg-slate-50 border border-slate-300 text-sm text-slate-900 font-mono font-bold rounded-xl outline-hidden focus:bg-white focus:border-indigo-500 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-indigo-500 text-center"
+                        />
+                      </div>
                     </div>
+
+                    {/* Quick Override Presets */}
+                    <div className="flex items-center gap-1.5 pt-0.5 flex-wrap">
+                      <span className="text-[10px] text-slate-400 font-medium">Quick presets:</span>
+                      {[7, 8, 10, 13].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => {
+                            setModalTargetDigits(preset);
+                            setIsDigitsLocked(true);
+                          }}
+                          className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border transition cursor-pointer ${
+                            modalTargetDigits === preset
+                              ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          {preset}d
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsDigitsLocked(false);
+                          const digitsCount = modalTarget.replace(/\D/g, '').length;
+                          setModalTargetDigits(digitsCount > 0 ? digitsCount : '');
+                        }}
+                        className="text-[10px] font-medium text-indigo-600 hover:text-indigo-800 underline ml-1 cursor-pointer"
+                      >
+                        Reset auto
+                      </button>
+                    </div>
+
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Press <strong className="text-slate-700 font-bold">Enter</strong> to save and proceed to next image.
+                    </p>
 
                     <div>
                       <label 
@@ -1836,7 +1978,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                         onKeyDown={async (e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
-                            await handleSaveVerifyCode(modalTarget, modalIssuer, currentInv);
+                            await handleSaveVerifyCode(modalTarget, modalIssuer, modalTargetDigits, currentInv);
                             handleNextReview();
                           }
                         }}
@@ -1862,7 +2004,7 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                     <button
                       type="button"
                       disabled={isSavingCode}
-                      onClick={() => handleSaveVerifyCode(modalTarget, modalIssuer, currentInv)}
+                      onClick={() => handleSaveVerifyCode(modalTarget, modalIssuer, modalTargetDigits, currentInv)}
                       aria-label="Save verified transcription target code to Database & Cache"
                       className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-xs font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50 outline-hidden focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-1"
                       title="Save verified transcription target code to Database & Cache"

@@ -60,6 +60,9 @@ export interface GeneratedInvoiceData {
   note?: string;
   category?: TrainingCategory;
   customImageUrl?: string;
+  target_value?: string;
+  target_digits?: number;
+  custom_digit_length?: number;
 }
 
 export interface CustomInvoice {
@@ -72,6 +75,9 @@ export interface CustomInvoice {
   style?: InvoiceStyle;
   customImageUrl: string;
   category?: TrainingCategory;
+  target_value?: string;
+  target_digits?: number;
+  custom_digit_length?: number;
 }
 
 export interface AttemptResult {
