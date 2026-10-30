@@ -112,96 +112,100 @@ export default function StatsPanel({
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" id="stats-dashboard-grid">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" id="stats-dashboard-grid" role="status" aria-label="Real-time typing statistics">
         {/* 1. Progress State */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center space-x-3.5 shadow-sm transition">
-          <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
-            <Award className="w-5 h-5" />
+        <div className="bg-white border border-slate-300 rounded-2xl p-5 flex items-center space-x-3.5 shadow-sm transition">
+          <div className="p-3 bg-indigo-50 text-indigo-700 rounded-xl border border-indigo-200">
+            <Award className="w-5 h-5 text-indigo-700" width={20} height={20} aria-hidden="true" />
           </div>
           <div className="flex-1 min-w-0">
-            <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">
+            <span className="block text-[11px] font-extrabold text-slate-700 uppercase tracking-widest leading-none font-sans">
               {t.progressLabel}
             </span>
-            <span className="block text-2xl font-bold text-slate-800 mt-1 font-mono">
+            <span className="block text-2xl font-bold text-slate-900 mt-1 font-mono">
               {isTestActive ? `${currentIndex + 1}/${totalCount}` : `Completed`}
             </span>
             {/* Visual Gauge */}
-            <div className="mt-2 h-1 w-full bg-slate-100 overflow-hidden rounded">
-               <div className="bg-indigo-500 h-full transition-all duration-300" style={{ width: `${progressRatio}%` }}></div>
+            <div className="mt-2 h-1.5 w-full bg-slate-200 overflow-hidden rounded-full">
+               <div className="bg-indigo-600 h-full transition-all duration-300 rounded-full" style={{ width: `${progressRatio}%` }}></div>
             </div>
-            <span className="text-[10px] text-slate-400 font-mono block mt-1">
+            <span className="text-[11px] font-semibold text-slate-600 font-mono block mt-1">
               {isTestActive ? `${totalCount - currentIndex - 1} pending` : 'All tasks completed'}
             </span>
           </div>
         </div>
 
         {/* 2. Precision Timer */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center space-x-3.5 shadow-sm transition">
-          <div className={`p-3 rounded-xl transition-colors ${
-            parseFloat(currentElapsedSec) > 6.0 && isTestActive ? 'bg-amber-50 text-amber-600 animate-pulse' : 'bg-indigo-50 text-indigo-600'
+        <div className="bg-white border border-slate-300 rounded-2xl p-5 flex items-center space-x-3.5 shadow-sm transition">
+          <div className={`p-3 rounded-xl transition-colors border ${
+            parseFloat(currentElapsedSec) > 6.0 && isTestActive ? 'bg-amber-100 text-amber-900 border-amber-300 animate-pulse' : 'bg-indigo-50 text-indigo-700 border-indigo-200'
           }`}>
-            <Clock className="w-5 h-5" />
+            <Clock className="w-5 h-5" width={20} height={20} aria-hidden="true" />
           </div>
           <div className="flex-1 min-w-0">
-            <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">
+            <span className="block text-[11px] font-extrabold text-slate-700 uppercase tracking-widest leading-none font-sans">
               {t.elapsedTime}
             </span>
             <span className={`block text-2xl font-bold mt-1 font-mono transition-colors ${
-              parseFloat(currentElapsedSec) > 6.0 && isTestActive ? 'text-amber-600' : 'text-slate-800'
+              parseFloat(currentElapsedSec) > 6.0 && isTestActive ? 'text-amber-900' : 'text-slate-900'
             }`}>
               {isTestActive ? `${currentElapsedSec}s` : '0.00s'}
             </span>
             {/* Visual Gauge */}
-            <div className="mt-2 h-1 w-full bg-slate-100 overflow-hidden rounded">
-               <div className={`h-full transition-all duration-100 ${
-                 parseFloat(currentElapsedSec) > 6.0 ? 'bg-amber-500' : 'bg-indigo-500'
+            <div className="mt-2 h-1.5 w-full bg-slate-200 overflow-hidden rounded-full">
+               <div className={`h-full transition-all duration-100 rounded-full ${
+                 parseFloat(currentElapsedSec) > 6.0 ? 'bg-amber-600' : 'bg-indigo-600'
                }`} style={{ width: `${clockRatio}%` }}></div>
             </div>
-            <span className={`text-[10px] block mt-1 truncate ${parseFloat(currentElapsedSec) > 6.0 ? 'text-amber-600 font-bold' : 'text-slate-400'}`}>
+            <span className={`text-[11px] font-semibold block mt-1 truncate ${parseFloat(currentElapsedSec) > 6.0 ? 'text-amber-900 font-bold' : 'text-slate-600'}`}>
               {parseFloat(currentElapsedSec) > 6.0 ? 'Exceeds SLA targets' : 'Target: < 6.00s'}
             </span>
           </div>
         </div>
 
         {/* 3. Operational Integrity/Accuracy */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center space-x-3.5 shadow-sm transition">
-          <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-            <Percent className="w-5 h-5" />
+        <div className="bg-white border border-slate-300 rounded-2xl p-5 flex items-center space-x-3.5 shadow-sm transition">
+          <div className="p-3 bg-emerald-50 text-emerald-800 rounded-xl border border-emerald-200">
+            <Percent className="w-5 h-5 text-emerald-800" width={20} height={20} aria-hidden="true" />
           </div>
           <div className="flex-1 min-w-0">
-            <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">
+            <span className="block text-[11px] font-extrabold text-slate-700 uppercase tracking-widest leading-none font-sans">
               {t.accuracyLabel}
             </span>
-            <span className="block text-2xl font-bold text-slate-800 mt-1 font-mono">
+            <span 
+              className="block text-2xl font-bold text-slate-900 mt-1 font-mono"
+              aria-live="polite"
+              aria-atomic="true"
+            >
               {accuracy}%
             </span>
             {/* Visual Gauge */}
-            <div className="mt-2 h-1 w-full bg-slate-100 overflow-hidden rounded">
-               <div className="bg-emerald-500 h-full transition-all duration-300" style={{ width: `${accuracy}%` }}></div>
+            <div className="mt-2 h-1.5 w-full bg-slate-200 overflow-hidden rounded-full">
+               <div className="bg-emerald-600 h-full transition-all duration-300 rounded-full" style={{ width: `${accuracy}%` }}></div>
             </div>
-            <span className="text-[10px] text-slate-400 block mt-1 truncate">
+            <span className="text-[11px] font-semibold text-slate-600 block mt-1 truncate font-sans">
               {correctCount}/{totalCompleted} correct entries
             </span>
           </div>
         </div>
 
         {/* 4. Average Typing Speed */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center space-x-3.5 shadow-sm transition">
-          <div className="p-3 bg-pink-50 text-pink-600 rounded-xl">
-            <Zap className="w-5 h-5" />
+        <div className="bg-white border border-slate-300 rounded-2xl p-5 flex items-center space-x-3.5 shadow-sm transition">
+          <div className="p-3 bg-pink-50 text-pink-800 rounded-xl border border-pink-200">
+            <Zap className="w-5 h-5 text-pink-700" width={20} height={20} aria-hidden="true" />
           </div>
           <div className="flex-1 min-w-0">
-            <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">
+            <span className="block text-[11px] font-extrabold text-slate-700 uppercase tracking-widest leading-none font-sans">
               {t.averageSpeedLabel}
             </span>
-            <span className="block text-2xl font-bold text-slate-800 mt-1 font-mono">
+            <span className="block text-2xl font-bold text-slate-900 mt-1 font-mono">
               {averageTimeSec}s
             </span>
             {/* Visual Gauge */}
-            <div className="mt-2 h-1 w-full bg-slate-100 overflow-hidden rounded">
-               <div className="bg-pink-550 h-full transition-all duration-300" style={{ width: `${speedRatio}%`, backgroundColor: 'rgb(236 72 153)' }}></div>
+            <div className="mt-2 h-1.5 w-full bg-slate-200 overflow-hidden rounded-full">
+               <div className="bg-pink-600 h-full transition-all duration-300 rounded-full" style={{ width: `${speedRatio}%` }}></div>
             </div>
-            <span className="text-[10px] text-slate-400 block mt-1 truncate font-mono">
+            <span className="text-[11px] font-semibold text-slate-700 block mt-1 truncate font-mono">
               {cpm > 0 ? `${cpm} CPM | ${wpm} WPM` : 'No logs cataloged'}
             </span>
           </div>
@@ -338,7 +342,7 @@ export function SpeedDashboard({
   const categoryConfig = CATEGORY_SLA_CONFIG[cardCategory];
 
   return (
-    <div className="space-y-6 animate-fade-in" id="dashboard-tab-view">
+    <div className="space-y-6 animate-fade-in" id="dashboard-tab-view" role="status" aria-label="Speed Ranking Panel">
       
       {/* Category and Mode Selectors at the top of the leaderboard */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3.5" id="segmented-mode-bar-container">

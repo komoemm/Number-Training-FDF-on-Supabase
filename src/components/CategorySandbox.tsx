@@ -1964,6 +1964,9 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                             <img
                               src={inv.customImageUrl}
                               alt={`Thumbnail for ${displayTitle}`}
+                              width={48}
+                              height={40}
+                              style={{ aspectRatio: '48 / 40' }}
                               loading="lazy"
                               decoding="async"
                               className="object-cover w-full h-full group-hover:scale-105 transition duration-150"
@@ -2141,6 +2144,9 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                           <img
                             src={inv.customImageUrl}
                             alt={`Receipt preview for ${displayTitle}`}
+                            width={48}
+                            height={40}
+                            style={{ aspectRatio: '48 / 40' }}
                             loading="lazy"
                             decoding="async"
                             className="object-cover w-full h-full group-hover:scale-105 transition duration-150"
@@ -2275,7 +2281,10 @@ export const CategorySandbox: React.FC<CategorySandboxProps> = ({
                     <img 
                       src={currentInv.customImageUrl} 
                       alt={`Receipt image preview for ${displayIdentifier}`} 
-                      className="max-h-full max-w-full rounded shadow-md object-contain border border-slate-800"
+                      width={400}
+                      height={560}
+                      style={{ aspectRatio: '400 / 560' }}
+                      className="max-h-full max-w-full rounded shadow-md object-contain border border-slate-850"
                     />
                   ) : (
                     <div className="text-center p-6 text-slate-500">

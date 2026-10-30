@@ -6,12 +6,18 @@
 import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { supabase, isSupabaseActive, isSupabaseConfigured } from './supabase';
 import { 
-  generateSampleCustomInvoice, 
-  renderReceiptToDataUrl,
-  generateRandomInvoiceNumber,
-  generateRandomDateNumber,
-  generateRandomPhoneNumber
-} from './utils/receiptGenerator';
+  generateRandomInvoiceNumber, 
+  generateRandomDateNumber, 
+  generateRandomPhoneNumber 
+} from './utils/numberGenerators';
+import {
+  InvoiceViewerSkeleton,
+  CategorySandboxSkeleton,
+  HistoryLogsSkeleton,
+  StatsPanelSkeleton,
+  LoginScreenSkeleton
+} from './components/SkeletonLoaders';
+import TypingInputStation, { TypingCardMetrics } from './components/TypingInputStation';
 import { 
   evaluateCategoryLevel, 
   getCategoryRankDetails, 
@@ -433,11 +439,6 @@ export default function App() {
   const startTimeRef = useRef<number>(0);
   const timerIntervalRef = useRef<number | null>(null);
 
-  // Active Typist Input Form Values
-  const [typedValue, setTypedValue] = useState<string>('');
-  const [lastCharacterValid, setLastCharacterValid] = useState<boolean | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
   // Session stats & Strict Mistakes Rule tracking
   const [sessionResults, setSessionResults] = useState<TypingDetail[]>([]);
   const [correctCount, setCorrectCount] = useState<number>(0);
@@ -783,11 +784,13 @@ export default function App() {
       startTimeRef.current = performance.now();
       setElapsedMs(0);
 
-      // Start the display tick updates
+      // Start the display tick updates throttled to 100ms with React.startTransition to never block user input
       timerIntervalRef.current = window.setInterval(() => {
         const delta = performance.now() - startTimeRef.current;
-        setElapsedMs(Math.round(delta));
-      }, 37) as unknown as number;
+        React.startTransition(() => {
+          setElapsedMs(Math.round(delta));
+        });
+      }, 100) as unknown as number;
     }
 
     return () => {
@@ -796,13 +799,6 @@ export default function App() {
         timerIntervalRef.current = null;
       }
     };
-  }, [currentIndex, isTestActive]);
-
-  // Handle automatic autofocus when image state changes
-  useEffect(() => {
-    if (isTestActive && inputRef.current) {
-      inputRef.current.focus();
-    }
   }, [currentIndex, isTestActive]);
 
   /**
@@ -913,8 +909,6 @@ export default function App() {
     setAverageTimeMs(0);
     setSessionTotalTimeMs(0);
     setCurrentIndex(0);
-    setTypedValue('');
-    setLastCharacterValid(null);
     setTestComplete(false);
     setIsConfirmingCancel(false);
     setShowErrorReview(false);
@@ -946,6 +940,54 @@ export default function App() {
     }
   };
 
+  // Global accessible keyboard shortcuts (Enter to submit/restart, Esc to restart/abort/dismiss modals)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Escape key behavior
+      if (e.key === 'Escape') {
+        if (labelingModalIndex !== null) {
+          e.preventDefault();
+          setLabelingModalIndex(null);
+          return;
+        }
+        if (showErrorReview) {
+          e.preventDefault();
+          setShowErrorReview(false);
+          return;
+        }
+        if (isTestActive) {
+          e.preventDefault();
+          if (isConfirmingCancel) {
+            setIsConfirmingCancel(false);
+          } else {
+            setIsConfirmingCancel(true);
+          }
+          return;
+        }
+        if (testComplete) {
+          e.preventDefault();
+          setTestComplete(false);
+          setIsTestActive(false);
+          return;
+        }
+      }
+
+      // Enter key behavior on results screen to restart test
+      if (e.key === 'Enter') {
+        if (testComplete && !isTestActive) {
+          const target = e.target as HTMLElement;
+          if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'BUTTON')) return;
+          e.preventDefault();
+          handleRunAgain();
+          return;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [labelingModalIndex, showErrorReview, isTestActive, isConfirmingCancel, testComplete, activeTrainingCategory, trainingMode]);
+
   /**
    * Emergency abort to cancel the active testing session and return to dashboard.
    */
@@ -953,7 +995,6 @@ export default function App() {
     setIsTestActive(false);
     setTestComplete(false);
     setCurrentIndex(0);
-    setTypedValue('');
     setSessionResults([]);
     setCorrectCount(0);
     setAverageTimeMs(0);
@@ -1126,6 +1167,7 @@ export default function App() {
    */
   const handleAddSampleToCustomList = async (category: TrainingCategory = activeTrainingCategory) => {
     const categoryCount = customInvoices.filter(i => (i.category || 'tax_number') === category).length + 1;
+    const { generateSampleCustomInvoice } = await import('./utils/receiptGenerator');
     const newCustom = generateSampleCustomInvoice(category, categoryCount);
     
     const updated = [...customInvoices, newCustom];
@@ -1307,68 +1349,24 @@ export default function App() {
     startTimeRef.current = performance.now();
   };
 
-  /**
-   * Category-aware input filtering & auto-advance handler
-   */
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const rawVal = e.target.value;
-    const currentInvoice = expectedDataset[currentIndex];
-    if (!currentInvoice) return;
-    const currentCard = currentInvoice;
-    if (!currentCard.target_value) {
-      currentCard.target_value = (currentCard as any).expectedValue || currentCard.expectedNumber || '';
-    }
-
-    // Dynamic Target Length Detection as specified
-    const requiredDigits = currentCard.target_value 
-      ? currentCard.target_value.replace(/\D/g, '').length 
-      : (currentCard.custom_digit_length || (currentCard as any).target_digits || 13);
-
-    // Filter to digits and clamp to dynamic requiredDigits
-    const cleaned = rawVal.replace(/\D/g, '').slice(0, requiredDigits);
-    setTypedValue(cleaned);
-
-    const expDigitsOnly = currentCard.target_value.replace(/\D/g, '');
-
-    // Real-time character match feedback
-    if (cleaned.length > 0) {
-      setLastCharacterValid(expDigitsOnly.startsWith(cleaned));
-    } else {
-      setLastCharacterValid(null);
-    }
-
-    // Trigger auto-submit / card completion automatically when input.length === requiredDigits
-    if (cleaned.length === requiredDigits && requiredDigits > 0) {
-      verifyAndAdvanceSession(cleaned, currentCard.category || 'tax_number');
-    }
-  };
-
-  /**
-   * Enter key triggers immediate submission without locking up
-   */
-  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      if (typedValue.length > 0) {
-        const currentInvoice = expectedDataset[currentIndex];
-        const category: TrainingCategory = currentInvoice?.category || 'tax_number';
-        verifyAndAdvanceSession(typedValue, category);
-      }
-    }
-  };
 
   /**
    * Evaluates speed capture and writes entry metrics, then advances to next invoice.
    * Tracks strict mistake rule (>2 errors = Disqualified/Fail).
    */
-  const verifyAndAdvanceSession = (typedText: string, category: TrainingCategory) => {
+  const verifyAndAdvanceSession = (
+    typedText: string, 
+    category: TrainingCategory,
+    providedDurationMs?: number,
+    _metrics?: TypingCardMetrics
+  ) => {
     const endTimestamp = performance.now();
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = null;
     }
 
-    const durationMs = Math.round(endTimestamp - startTimeRef.current);
+    const durationMs = providedDurationMs ?? Math.round(endTimestamp - startTimeRef.current);
     const currentInvoice = expectedDataset[currentIndex];
     const currentCard = currentInvoice;
     if (!currentCard.target_value) {
@@ -1410,9 +1408,6 @@ export default function App() {
         timeSpentMs: durationMs
       }]);
     }
-
-    setTypedValue('');
-    setLastCharacterValid(null);
 
     const nextIndex = currentIndex + 1;
 
@@ -1645,7 +1640,7 @@ export default function App() {
   // If user is not authenticated locally, show Login Screen
   if (!currentOfflineUser) {
     return (
-      <Suspense fallback={<LoadingSpinner message="Loading authentication portal..." className="min-h-screen bg-slate-900 border-none rounded-none" />}>
+      <Suspense fallback={<LoginScreenSkeleton />}>
         <LoginScreen 
           onLogin={handleOfflineLogin}
           localUsers={localUsers}
@@ -1953,7 +1948,7 @@ export default function App() {
                       </p>
                     </div>
 
-                    <Suspense fallback={<LoadingSpinner message="Loading invoice training sandbox..." className="p-12 min-h-[320px]" />}>
+                    <Suspense fallback={<CategorySandboxSkeleton />}>
                       <CategorySandbox
                         category="tax_number"
                         invoices={customInvoices}
@@ -2189,7 +2184,7 @@ export default function App() {
           return (
             <div className="space-y-6 animate-fade-in" id="active-test-container">
               {/* Real-time stats header banner */}
-              <Suspense fallback={<LoadingSpinner message="Loading performance telemetry..." className="p-4 min-h-[90px]" />}>
+              <Suspense fallback={<StatsPanelSkeleton />}>
                 <StatsPanel
                   currentIndex={currentIndex}
                   totalCount={expectedDataset.length}
@@ -2211,7 +2206,7 @@ export default function App() {
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
                 {/* Left Column: Image Scan Workstation */}
                 <div className="lg:col-span-7">
-                  <Suspense fallback={<LoadingSpinner message="Loading invoice scanner..." className="p-12 min-h-[420px]" />}>
+                  <Suspense fallback={<InvoiceViewerSkeleton />}>
                     <InvoiceViewer
                       currentInvoice={currentInvoice}
                       onImageLoaded={handleInvoiceImageOnLoad}
@@ -2220,163 +2215,26 @@ export default function App() {
                   </Suspense>
                 </div>
 
-                {/* Right Column: Key Entry Node */}
-                <div className="lg:col-span-5 flex flex-col justify-between bg-white border border-slate-200 rounded-2xl p-6 shadow-sm relative overflow-hidden">
-                  <div className="space-y-6">
-                    {/* Title card with Real-Time Card Index Indicator & Mistake Counter */}
-                    <div className="flex justify-between items-start gap-3 flex-wrap">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-1 rounded-xl font-mono shadow-2xs">
-                            Card {currentIndex + 1} / {expectedDataset.length}
-                          </span>
-                          <span className="text-[10px] font-extrabold px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 uppercase tracking-wider font-mono">
-                            🧾 TARGET NUMBER ({requiredDigits} DIGITS)
-                          </span>
-                        </div>
-
-                        {/* Mistakes status indicator */}
-                        <div className="flex items-center gap-1.5 pt-0.5">
-                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-mono font-bold border ${
-                            mistakesCount === 0
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              : mistakesCount <= 2
-                              ? 'bg-amber-50 text-amber-800 border-amber-300'
-                              : 'bg-rose-100 text-rose-800 border-rose-300 animate-pulse font-black'
-                          }`}>
-                            <AlertCircle className="w-3 h-3" />
-                            <span>Mistakes: {mistakesCount} / 2 allowed {mistakesCount > 2 ? '⚠️ FAIL (Disqualified)' : ''}</span>
-                          </span>
-                        </div>
-                      </div>
-
-                      {!isConfirmingCancel ? (
-                        <button
-                          onClick={() => setIsConfirmingCancel(true)}
-                          aria-label="Abort testing session"
-                          className="px-3 py-1.5 bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200 hover:border-rose-300 rounded-lg text-xs font-bold tracking-wider uppercase cursor-pointer transition"
-                          id="abort-session-btn"
-                        >
-                          Cancel
-                        </button>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Abort?</span>
-                          <button
-                            onClick={handleCancelTestingSession}
-                            aria-label="Confirm aborting current typing session"
-                            className="px-2 py-1 bg-red-600 text-white hover:bg-red-700 rounded text-xs font-bold uppercase cursor-pointer transition shrink-0"
-                            id="confirm-abort-btn"
-                          >
-                            Yes
-                          </button>
-                          <button
-                            onClick={() => setIsConfirmingCancel(false)}
-                            aria-label="Dismiss and continue typing session"
-                            className="px-2 py-1 bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200 rounded text-xs font-bold uppercase cursor-pointer transition shrink-0"
-                            id="cancel-abort-btn"
-                          >
-                            No
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Visual stream progress line */}
-                    <div className="-mt-2">
-                      <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                        <div 
-                          className="bg-gradient-to-r from-indigo-500 to-teal-500 h-2 transition-all duration-200"
-                          style={{ width: `${((currentIndex + 1) / expectedDataset.length) * 100}%` }}
-                        />
-                      </div>
-                    </div>
-
-                    {/* Typing form input container */}
-                    <div className="space-y-3 relative">
-                      <label htmlFor="numeric-speed-input" id="numeric-speed-input-label" className="block text-xs font-bold text-slate-700 uppercase tracking-widest">
-                        {`TARGET NUMBER (${requiredDigits} DIGITS)`}
-                      </label>
-
-                      {/* Alphanumeric / Numeric Text Field */}
-                      <div className="relative">
-                        <input
-                          id="numeric-speed-input"
-                          ref={inputRef}
-                          type="text"
-                          inputMode="numeric"
-                          role="progressbar"
-                          aria-labelledby="numeric-speed-input-label"
-                          aria-label={`Target Number Input ${typedValue.length} of ${requiredDigits} digits`}
-                          aria-valuenow={typedValue.length}
-                          aria-valuemin={0}
-                          aria-valuemax={requiredDigits}
-                          value={typedValue}
-                          onChange={handleInputChange}
-                          onKeyDown={handleInputKeyDown}
-                          onPaste={handlePastePrevent}
-                          onCopy={handleCopyPrevent}
-                          autoComplete="off"
-                          autoCapitalize="characters"
-                          spellCheck={false}
-                          placeholder={`Enter ${requiredDigits} digits`}
-                          className={`w-full py-4 px-5 text-center text-3xl font-bold tracking-[0.2em] font-mono text-slate-800 placeholder:text-slate-300 bg-slate-50 border focus:ring-4 outline-none rounded-xl transition ${
-                            lastCharacterValid === true ? 'border-emerald-500 focus:ring-emerald-50 bg-emerald-50/10 text-emerald-800' : 
-                            lastCharacterValid === false ? 'border-rose-500 focus:ring-rose-50 bg-rose-50/10 text-rose-800' : 'border-slate-250 focus:ring-indigo-100'
-                          }`}
-                        />
-
-                        {/* Character count ticks (Dynamic Progress Indicator) */}
-                        <div className="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 flex items-center justify-center">
-                          <span className="text-[11px] font-bold font-mono text-slate-400 bg-white border border-slate-205 px-1.5 py-0.5 rounded tracking-wide shadow-2xs" id="input-progress-indicator">
-                            {typedValue.length} / {requiredDigits}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Visual tick ribbon (Dynamic Dots) */}
-                      <div className="flex justify-center space-x-1 h-1.5 flex-wrap gap-y-1" aria-hidden="true">
-                        {Array.from({ length: requiredDigits }).map((_, idx) => {
-                          let dotColor = 'bg-slate-100 border border-slate-200';
-                          if (idx < typedValue.length) {
-                            if (lastCharacterValid === false && idx === typedValue.length - 1) {
-                              dotColor = 'bg-rose-500';
-                            } else {
-                              dotColor = 'bg-indigo-600';
-                            }
-                          }
-                          return (
-                            <div 
-                              key={idx} 
-                              className={`w-3 h-1.5 rounded-full transition-colors ${dotColor}`} 
-                            />
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Entry specifications card */}
-                    <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-150 space-y-1.5 text-xs text-slate-500">
-                      <span className="text-[10px] uppercase font-bold tracking-widest text-slate-600 block">
-                        Quick Entry Rules:
-                      </span>
-                      <ul className="space-y-1 text-[11px] leading-relaxed list-disc list-inside">
-                        <li>Enter <strong className="text-slate-800 font-mono">{requiredDigits} digits</strong> matching the card target value.</li>
-                        <li>Auto-advances immediately upon entering all {requiredDigits} digits.</li>
-                        <li>Press <strong className="text-slate-700 font-bold">Enter</strong> anytime to submit immediately.</li>
-                        <li>Click outside? Click <button onClick={() => inputRef.current?.focus()} className="text-indigo-600 hover:text-indigo-500 underline cursor-pointer font-bold">Refocus Input</button>.</li>
-                      </ul>
-                    </div>
-                  </div>
-
-                  {/* Left Time threshold bar */}
-                  <div className="mt-6 border-t border-slate-150 pt-3 flex justify-between items-center text-slate-500 text-[11px] font-mono">
-                    <span>Card {currentIndex + 1} of 100</span>
-                    <span className={elapsedMs > 2300 ? 'text-rose-600 font-bold' : 'text-indigo-600 font-bold'}>
-                      Pace: {(elapsedMs / 1000).toFixed(2)}s / card (Target ≤ 2.3s)
-                    </span>
-                  </div>
-                </div>
+                {/* Right Column: Key Entry Node - High-INP Isolated Station */}
+                <TypingInputStation
+                  key={currentCard.id || currentIndex}
+                  currentIndex={currentIndex}
+                  totalCards={expectedDataset.length}
+                  targetValue={currentCard.target_value}
+                  requiredDigits={requiredDigits}
+                  category={currentCard.category || activeTrainingCategory}
+                  startTime={startTimeRef.current}
+                  mistakesCount={mistakesCount}
+                  isConfirmingCancel={isConfirmingCancel}
+                  onInitiateCancel={() => setIsConfirmingCancel(true)}
+                  onConfirmCancel={handleCancelTestingSession}
+                  onDismissCancel={() => setIsConfirmingCancel(false)}
+                  onPasteBlocked={handlePastePrevent}
+                  onCopyBlocked={handleCopyPrevent}
+                  onCompleteCard={(finalText, durationMs, metrics) => {
+                    verifyAndAdvanceSession(finalText, currentCard.category || activeTrainingCategory, durationMs, metrics);
+                  }}
+                />
               </div>
             </div>
           );
@@ -2721,7 +2579,7 @@ export default function App() {
                   </button>
                 </div>
 
-                <Suspense fallback={<LoadingSpinner message="Loading session benchmarks..." className="p-12 min-h-[260px]" />}>
+                <Suspense fallback={<HistoryLogsSkeleton />}>
                   <HistoryLogs 
                     userId={currentOfflineUser ? currentOfflineUser.username : 'admin'} 
                     refreshTrigger={refreshTrigger}
@@ -2783,6 +2641,9 @@ export default function App() {
                   <img 
                     src={inv.customImageUrl} 
                     alt="Receipt Preview" 
+                    width={400}
+                    height={560}
+                    style={{ aspectRatio: '400 / 560' }}
                     className="max-h-full max-w-full rounded shadow-md object-contain border border-slate-850"
                   />
                 </div>
